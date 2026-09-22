@@ -61,6 +61,7 @@ def build() -> dict:
         meta = {
             "collection": e["collection"],
             "source": e["id"],
+            "source_id": e["id"],  # retrieve.py 가 source_id 를 우선 읽는다 (source 는 하위 호환).
             # applies_to 는 목록이다(한 문서가 두 기술에 걸릴 수 있음).
             "applies_to": e.get("applies_to", []),
             "perspectives": e.get("perspectives", []),
@@ -72,7 +73,7 @@ def build() -> dict:
         if e.get("excerpt_only") and not e.get("excerpt_pages"):
             notes.append(
                 f"{e['id']}: excerpt_only 인데 excerpt_pages 가 없어 전문({e.get('pages_counted')}쪽)을 "
-                "색인했다. sources.json 에 excerpt_pages: [시작, 끝] 을 지정할 것 (R3)."
+                "색인했다. sources.json 에 excerpt_pages: [시작, 끝] 을 지정할 것 (R2)."
             )
         print(f"[index] {e['collection']}/{e['id']}: "
               f"{e.get('pages_counted','?')}쪽 / 청크 {len(chunks)}개")

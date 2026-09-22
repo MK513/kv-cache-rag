@@ -7,7 +7,12 @@ multilingual-e5-small 단독. revision 과 차원을 고정해 재실행 간 인
 from langchain_huggingface import HuggingFaceEmbeddings
 
 EMBED_MODEL = "intfloat/multilingual-e5-small"
-EMBED_REVISION = "main"   # 재현성을 위해 커밋 해시로 고정할 것 (R2, 0h)
+EMBED_REVISION = "main"
+# TODO(R2): 재현성을 위해 위 값을 커밋 해시로 고정할 것. 네트워크가 열린 환경에서
+# 아래 명령으로 현재 main 이 가리키는 해시를 확인해 대입한다:
+#   curl -s https://huggingface.co/api/models/intfloat/multilingual-e5-small \
+#     | python3 -c "import json,sys; print(json.load(sys.stdin)['sha'])"
+# 이 세션은 huggingface.co 로 나가는 네트워크가 막혀 있어 값을 직접 조회하지 못했다.
 EMBED_DIM = 384
 
 
