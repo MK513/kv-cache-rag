@@ -1,0 +1,22 @@
+# 실행 설정 — 담당: R1
+# 모델은 .env 의 LLM_MODEL 로 덮어쓸 수 있다. 팀 계정에서 호출이 안 되면 fallback 을 쓴다.
+
+llm:
+  model: gpt-5.6-luna
+  fallback: gpt-4.1-mini      # 위 모델 미지원/미가용 시 .env LLM_MODEL 로 교체
+  temperature: 0
+
+retrieval:
+  top_k: 5
+  rrf_k: 60                   # RRF 상수. score = Σ 1/(rrf_k + rank)
+  dense_weight: 0.5
+  sparse_weight: 0.5
+
+limits:
+  max_pages: 200              # 색인 대상 전체(3 컬렉션) 합계 상한
+  web_chars_per_page: 3200    # 웹 문서 쪽수 환산
+  chunk_tokens: 400
+  chunk_overlap: 80
+  chunk_hard_cap: 512         # 임베딩 입력 한도. 초과분은 의미 단위에서 재분할
+  retrieval_round: 2          # 기술 조사 최초 1회 + 질의 보완 1회 (설계서 §8)
+  validation_round: 2         # 최초 1회 + 인용 수정 1회

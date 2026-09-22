@@ -1,0 +1,74 @@
+# Doc Pool 3 컬렉션 — 수집·색인 R2 / 자료 선별 R3(ecosystem·context)
+# 설계서 §3. 색인 대상은 이 파일에 있는 것뿐이다.
+# 3 컬렉션 쪽수 합계 200쪽 가드. 웹 문서는 3,200자 = 1쪽 환산.
+
+# ── papers_core: 선정 2건 + 비교 참조 2건 ────────────────────────
+# role=primary 는 정독·평가셋 대상, role=reference 는 비교 인용용(해당 절만).
+# DeepSeek-V2(~50쪽)는 쪽수 압박이 크고 아키텍처 계열이라 비교축이 달라 제외했다.
+papers_core:
+  - id: turboquant
+    role: primary
+    technology: TurboQuant
+    title: "TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate"
+    arxiv: "2504.19874"
+    url: "https://arxiv.org/pdf/2504.19874"
+    venue: "arXiv preprint"
+    published: "2025-04"
+
+  - id: itme
+    role: primary
+    technology: ITME
+    title: "ITME: Inference Tiered Memory Expansion with Disaggregated CXL-Hybrid Memories"
+    arxiv: "2606.12556"
+    url: "https://arxiv.org/pdf/2606.12556"
+    venue: "arXiv preprint"
+    published: "2026-06"
+
+  - id: kivi
+    role: reference
+    technology: TurboQuant      # SW 양자화 계열 비교축
+    title: "KIVI: A Tuning-Free Asymmetric 2bit Quantization for KV Cache"
+    arxiv: "2402.02750"
+    url: "https://arxiv.org/pdf/2402.02750"
+    venue: "ICML 2024"
+    published: "2024-02"
+
+  - id: infinigen
+    role: reference
+    technology: ITME            # HW 메모리 확장 계열 비교축 + TRL 시차(2024 vs 2026)
+    title: "InfiniGen: Efficient Generative Inference of LLMs with Dynamic KV Cache Management"
+    arxiv: "2406.19707"
+    url: "https://arxiv.org/pdf/2406.19707"
+    venue: "OSDI 2024"
+    published: "2024-06"
+
+# ── ecosystem: 시장성 ①②③ 근거. 선별 R3 ──────────────────────
+# 논문 본문에 없는 시장 규모·채택·표준 근거를 "색인해서" RAG 로 찾는다.
+# 웹 도구로 실시간 조회하지 않는 이유: 재현성 + 200쪽 가드 안에서 관리.
+# TODO(R3): 아래 4건을 실제 URL 로 확정. kind=web 은 본문을 스냅샷해 색인한다.
+ecosystem:
+  - id: eco_market_report
+    kind: web
+    topic: "시장 규모/성장성 — 추론 메모리·KV cache 비용"
+    url: ""
+  - id: eco_adoption
+    kind: web
+    topic: "상용화/채택 — 제품 출시 발표, 실제 배포 확인"
+    url: ""
+  - id: eco_framework
+    kind: web
+    topic: "생태계 지지 — 서빙 프레임워크의 KV 양자화 지원 현황"
+    url: ""
+  - id: eco_standard
+    kind: web
+    topic: "표준화 — CXL 컨소시엄 사양·제품 PoC"
+    url: ""
+
+# ── context: 도메인 배경 맥락 1건. 선별 R3 ────────────────────
+# domain 노드가 배경 서술에만 인용한다(벤치마크 근거로 쓰지 않는다).
+# 인용 가능하므로 REFERENCE [B] 풀 밖 색인 에 표기된다.
+context:
+  - id: ctx_datacenter
+    kind: web
+    topic: "데이터센터 LLM 추론의 동시성·비용 구조"
+    url: ""
