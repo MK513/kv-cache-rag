@@ -203,7 +203,13 @@ dense만 남겼다(`src/rag/retrieve.py`, `mode='rrf'`는 이제 `ValueError`). 
 
 `revision`·차원(384)을 고정해 재실행 간 인덱스가 흔들리지 않게 한다.
 
-**실측** — 설계서 §4 "측정 예정" 칸을 아래로 대체 (2026-09-22, `uv run python -m eval.retrieval_metrics`, mode=dense 단일)
+> ⚠️ **아래 수치는 현재 저장소에서 재현되지 않는다.** `eval/goldenset.json` 에 문항이
+> 2건뿐이고, 설계서 §4 가 요구하는 `gold_chunk_ids`(정답 청크 ID)가 지정돼 있지 않다.
+> 지금 `eval/retrieval_metrics.py` 를 실행하면 라벨링을 요구하며 중단한다.
+> 20문항 평가셋과 정답 청크 라벨링이 채워지기 전까지 이 표는 **미검증 기록**이다
+> (§10 — 미측정된 지표를 확정된 결과로 기재하지 않는다).
+
+**실측(미검증)** — 설계서 §4 "측정 예정" 칸을 채우려던 값 (2026-09-22, mode=dense 단일)
 
 | 구분 | n | Hit@1 | Hit@3 | Hit@5 | MRR@1 | MRR@3 | MRR@5 |
 |---|---|---|---|---|---|---|---|
@@ -276,7 +282,7 @@ uv run python -m eval.find_failed_queries
 │   ├── state.py, graph.py, llm.py, settings.py   # R1
 │   ├── rag/{chunk,embed,index}.py                # R2
 │   ├── rag/retrieve.py                           # R3
-│   ├── tools/{docs,web_search,web_fetch,web_store,load_paper}.py  # R2/R3
+│   ├── tools/{docs,web_search,web_fetch,web_store}.py            # R2/R3
 │   ├── agents/{research,maturity,domain}.py       # R4
 │   ├── agents/{market,stakeholder,stakeholder_contract}.py  # R3
 │   ├── agents/{synthesis,report}.py               # R5
@@ -458,7 +464,7 @@ PDF 는 **검증을 통과했을 때만** 나온다(§8 — 무효 인용이 남
 | 담당 | 트랙 | 파일 |
 |---|---|---|
 | **R1** | Graph & Runtime | `app.py` · `src/{state,graph,llm,settings}.py` · `src/agents/common.py` · `config/settings.yaml` |
-| **R2** | RAG 인프라 (3 컬렉션) | `sources.json` · `scripts/prepare_sources.py` · `src/rag/{chunk,embed,index}.py` · `src/tools/load_paper.py` · `scripts/ingest.py` · `eval/goldenset.json` |
+| **R2** | RAG 인프라 (3 컬렉션) | `sources.json` · `scripts/prepare_sources.py` · `src/rag/{chunk,embed,index}.py` · `scripts/ingest.py` · `eval/goldenset.json` |
 | **R3** | 검색 계층 + 시장성 + 이해관계자 | `src/rag/retrieve.py` · `src/tools/{docs,web_search,web_fetch,web_store}.py` · `src/agents/stakeholder{,_contract}.py` · `sources.json`의 ecosystem·context **자료 선별** |
 | **R4** | 논문 소비 에이전트 + 검색 평가 | `src/agents/{research,maturity,domain}.py` · `eval/retrieval_metrics.py` |
 | **R5** | 종합·보고서·출력 | `src/agents/{synthesis,report}.py` · `src/output/{validate,reference,pdf}.py` · `README.md` |
@@ -487,7 +493,7 @@ PDF 는 **검증을 통과했을 때만** 나온다(§8 — 무효 인용이 남
 | 이름 | 담당 | 주요 산출물 |
 |---|---|---|
 | 김민 | Graph & Runtime | State 17키, 공용 schema.py(Claim/Assessment/Source/Evidence/Gap), LangGraph 배선(조건부 보완·fan-out/fan-in·2단계 검증 라우팅), run_id 기반 실행 제어 |
-| 권수진 | RAG 인프라 | 3 컬렉션 재구성(excerpt 페이징), SHA-256·쪽수 매니페스트, 표/수식 깨짐 검토 마킹, `load_paper`, 검색 평가셋 20문항 |
+| 권수진 | RAG 인프라 | 3 컬렉션 재구성(excerpt 페이징), SHA-256·쪽수 매니페스트, 표/수식 깨짐 검토 마킹, 검색 평가셋 |
 | 정승원 | 검색 계층·시장성·이해관계자 | dense 코사인 검색(`retrieve.py`), 역할별 컬렉션/관점 잠금(`ROLE_COLLECTIONS`), 웹 근거 수집·스냅샷(`web_search/web_fetch/web_store`), 이해관계자 평가 노드 |
 | 권예리 | 평가 에이전트 | 기술조사·TRL 규칙표·도메인 노드, 검색 품질 실측 스크립트(`retrieval_metrics.py`) 재작성 |
 | 박인기 | 종합·출력 | _(git 커밋 이력만으로는 R5 구현 여부가 확인되지 않았습니다 — 본인이 직접 채워주세요: 구조 강제 종합, 인용 검증, REFERENCE 3구분, 한글 PDF 등)_ |

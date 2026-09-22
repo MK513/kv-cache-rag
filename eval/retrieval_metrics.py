@@ -4,6 +4,9 @@
 언어별(ko/en) × 모드별(dense/rrf)로 분리 측정하고, 같은 사실(fact)의 한/영 질의가
 모두 top_k 내에 회수된 비율인 '완전 회수율(Full Recovery Rate)'을 산출합니다.
 
+정답은 문항의 `gold_chunk_ids` 로만 판정합니다(§4). `gold_source`·`gold_page` 대체 매칭은
+답이 없는 같은 페이지 청크까지 적중으로 세어 지표를 부풀리므로 쓰지 않습니다.
+
 실행 방법:
     uv run python -m eval.retrieval_metrics
 """
@@ -31,8 +34,27 @@ MIN_N = 12  # 서브셋당 표본 수가 이보다 적으면 경향성 경고 �
 MODES = ("dense",)  # 단일 튜플 유지 (콤마 필수)
 
 
+def gold_chunks(item: Dict[str, Any]) -> set:
+    """정답 청크 ID 집합. 설계서 §4 가 문항마다 지정하라고 한 값이다.
+
+    §4 — *각 문항에는 fact_id, 언어, 대상 기술, 정답 근거 문장과 청크 ID를 지정한다.
+    겹침 때문에 같은 근거를 담은 청크가 여러 개면 모두 정답 집합에 넣는다.
+    같은 페이지라도 답이 없는 청크는 정답으로 세지 않는다.*
+
+    (source, page) 로 대신 맞추면 §4 가 명시적으로 배제한 "답이 없는 같은 페이지 청크" 가
+    적중으로 잡혀 지표가 실제보다 높게 나온다.
+    """
+    ids = item.get("gold_chunk_ids")
+    if not ids:
+        raise SystemExit(
+            f"❌ {item.get('id')}: gold_chunk_ids 가 없습니다. 설계서 §4 는 문항마다 정답 청크 ID 를\n"
+            f"   지정하라고 합니다. (source, page) 대체 매칭은 답이 없는 같은 페이지 청크까지\n"
+            f"   적중으로 세어 지표를 부풀립니다. eval/goldenset.json 에 라벨링이 필요합니다.")
+    return set(ids)
+
+
 def rank_of(item: Dict[str, Any], mode: str) -> Optional[int]:
-    """검색 결과에서 골든셋의 정답 청크(source, page)가 처음 등장한 순위(1-based)를 반환."""
+    """정답 청크가 처음 등장한 순위(1-based). 없으면 None."""
     hits = search(
         item["question"],
         collection="papers_core",
@@ -40,15 +62,10 @@ def rank_of(item: Dict[str, Any], mode: str) -> Optional[int]:
         top_k=max(KS),
         mode=mode,
     )
-    
-    target_source = item.get("gold_source")
-    target_page = int(item.get("gold_page", -1))
+    targets = gold_chunks(item)
 
     for idx, chunk in enumerate(hits, start=1):
-        chunk_source = chunk.get("source")
-        chunk_page = int(chunk.get("page", -1))
-        
-        if chunk_source == target_source and chunk_page == target_page:
+        if chunk.get("chunk_id") in targets:
             return idx
     return None
 
