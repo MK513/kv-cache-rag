@@ -1,21 +1,19 @@
-"""평가 종합 — 담당: R5 | State 읽기 전용
-
-네 관점의 평가 결과를 종합한다.
+"""평가 종합 — 담당: R5 | State 읽기 + gaps 순차 병합 (설계서 §6·§7)
 
 원칙:
-- 새로운 외부 근거를 검색하지 않는다.
-- 앞선 평가 노드에서 확정된 내용만 재사용한다.
-- 관점 간 차이나 상충을 억지로 만들지 않는다.
-- 실제 차이가 확인되는 경우에만 conflicts 에 기록한다.
-- TurboQuant + ITME 결합 효과는 공개 실측 근거가 없으면 가설로만 기록한다.
+- 새로운 외부 근거를 검색하지 않는다. §7 — 종합 단계는 이미 병합된 근거를 재사용하며
+  새 자료가 필요하면 그 항목을 공백으로 남긴다.
+- 앞선 평가 노드가 확정한 Claim 만 재사용한다.
+- 관점 간 차이를 억지로 만들지 않는다(§5).
+- 결합 효과는 공개 실측 근거가 없으면 가설로만 기록한다(§2·§5).
+
+`Synthesis`·`Conflict` 는 `src/schema.py` 가 소유한다. 여기서 다시 정의하지 않는다.
 """
 
-from typing import Literal
-
-from pydantic import BaseModel, Field
+import difflib
 
 from src.llm import get_llm
-
+from src.schema import Gap, Synthesis
 
 PERSPECTIVES = [
     "maturity",
@@ -25,44 +23,30 @@ PERSPECTIVES = [
 ]
 
 
-class Conflict(BaseModel):
-    """관점에 따라 평가 내용이 실제로 달라지는 지점."""
+GAP_SIMILARITY = 0.6    # 실측: 종합이 다시 쓴 공백은 대개 0.6~0.9, 새 항목은 0.5 미만
 
-    perspective: Literal["TRL", "시장성", "이해관계자", "도메인"]
 
-    why: str = Field(
-        description=(
-            "어떤 근거 또는 조건 때문에 관점별 평가가 달라지는지 설명한다. "
-            "기술 우열이나 종합 승자를 판정하지 않는다."
+def _restates(item: str, existing: list[str]) -> bool:
+    """이미 있는 공백을 말만 바꿔 되풀이한 것인지 본다."""
+    return any(difflib.SequenceMatcher(None, item, seen).ratio() >= GAP_SIMILARITY
+               for seen in existing)
+
+
+def _claims_text(assessment: dict) -> str:
+    """Assessment 를 종합 입력용 텍스트로 편다. 본문(text) 필드는 더 이상 없다."""
+    if not assessment:
+        return "(없음)"
+    lines = [f"status: {assessment.get('status', '미상')}"]
+    for claim in assessment.get("claims") or []:
+        lines.append(
+            f"- [{claim.get('kind', '')}/{claim.get('technology', '')}] "
+            f"{claim.get('text', '').strip()} "
+            f"(근거 {len(claim.get('evidence_ids') or [])}건)"
         )
-    )
-
-
-class Synthesis(BaseModel):
-    agreements: list[str] = Field(
-        default_factory=list,
-        description="여러 관점에서 공통적으로 확인되는 사실 또는 방향"
-    )
-
-    conflicts: list[Conflict] = Field(
-        default_factory=list,
-        description=(
-            "관점별 평가가 실제로 달라지는 지점. "
-            "차이가 확인되지 않으면 빈 목록을 허용한다."
-        )
-    )
-
-    gaps: list[str] = Field(
-        default_factory=list,
-        description="관점별 근거 공백과 아직 실증되지 않은 항목"
-    )
-
-    combination_hypothesis: str = Field(
-        description=(
-            "TurboQuant와 ITME의 결합 가능성에 대한 가설. "
-            "공개 결합 실험이 확인되지 않았다면 실측 결과가 아닌 추론임을 명시한다."
-        )
-    )
+    for gap in assessment.get("gaps") or []:
+        lines.append(f"- (공백) {gap.get('technology', '')} {gap.get('item', '')}: "
+                     f"{gap.get('reason', '')}")
+    return "\n".join(lines) if len(lines) > 1 else "status: " + str(assessment.get("status"))
 
 
 PROMPT = """너는 평가 종합 담당이다.
@@ -97,8 +81,8 @@ TRL, 시장성, 이해관계자, 도메인 적용 평가 결과를 종합한다.
 # 도메인 적용 평가
 {domain_assessment}
 
-# 기술 조사 상태
-{tech_status}
+# 기술 조사
+{research}
 
 # 기존 근거 공백
 {gaps}
@@ -118,44 +102,46 @@ FIX = """
 
 
 def synthesis(state) -> dict:
-    errors = state.get("validation_errors") or []
+    """종합 결과와, 합류분에 자기 공백을 이어 붙인 gaps 를 반환한다(§7 순차 병합)."""
+    errors = (state.get("validation") or {}).get("errors") or []
 
-    # 각 평가 노드가 기록한 gap과 기술 조사 단계의 gap을 병합한다.
-    merged_gaps = sorted(
-        {
-            gap
-            for perspective in PERSPECTIVES
-            for gap in (state.get(perspective, {}).get("gaps", []) or [])
-        }
-        | set(state.get("gaps") or [])
-    )
+    merged_gaps = list(state.get("gaps") or [])          # collect_evidence 가 합류시킨 공백
+    # §6 은 종합에게 공백을 "정리" 하라고 한다. 그런데 모델은 노드가 이미 보고한 공백을
+    # 자기 말로 다시 쓴다. 문자열 완전 일치로는 못 걸러서 유사도로 본다.
+    seen = [gap.get("item", "") for gap in merged_gaps]
 
-    llm = get_llm().with_structured_output(Synthesis)
-
-    result = llm.invoke(
+    result = get_llm().with_structured_output(Synthesis).invoke(
         PROMPT.format(
             fix=FIX.format(errors=errors) if errors else "",
-            tech_status=state.get("tech_status", {}),
-            gaps=merged_gaps,
-            **{
-                perspective: state.get(perspective, {}).get("text", "(없음)")
-                for perspective in PERSPECTIVES
-            },
+            research=_claims_text(state.get("research") or {}),
+            gaps="\n".join(f"- {gap.get('technology', '')} {gap.get('item', '')}: "
+                            f"{gap.get('reason', '')}" for gap in merged_gaps) or "(없음)",
+            **{perspective: _claims_text(state.get(perspective) or {})
+               for perspective in PERSPECTIVES},
         )
     )
 
-    # 앞 단계에서 확인된 gap이 synthesis 출력에서 누락되지 않도록 병합한다.
-    result.gaps = sorted(set(result.gaps) | set(merged_gaps))
+    # 종합이 새로 지목한 공백만 Gap 으로 덧붙인다. 앞 단계 공백은 그대로 유지한다.
+    for item in result.gaps:
+        gap = Gap(role="synthesis", technology="both", item=item,
+                  reason="종합 단계에서 확인한 공백").model_dump()
+        if not _restates(item, seen):
+            seen.append(item)
+            merged_gaps.append(gap)
+
+    # 보고서 §5 가 읽는 목록에도 앞 단계 공백을 남긴다.
+    result.gaps = sorted({*result.gaps, *(gap.get("item", "") for gap in merged_gaps)} - {""})
 
     return {
         "synthesis": result.model_dump(),
-        "trace": [
-            {
-                "node": "synthesis",
-                "agreements": len(result.agreements),
-                "conflicts": len(result.conflicts),
-                "gaps": len(result.gaps),
-                "rewrite": bool(errors),
-            }
-        ],
+        "gaps": merged_gaps,
+        "trace": [{
+            "node": "synthesis",
+            "status": "ok",
+            "attempt": 1,
+            "agreements": len(result.agreements),
+            "conflicts": len(result.conflicts),
+            "gaps": len(merged_gaps),
+            "rewrite": bool(errors),
+        }],
     }

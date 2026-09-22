@@ -1,0 +1,177 @@
+"""내용 검토 노드 — 담당: R5 (설계서 §8, 부록 A 의 `R` 노드)
+
+형식 검사와 사람의 내용 검토가 한 노드다. **ID 대조만으로 자동 통과시키지 않는다.**
+"""
+
+import csv
+
+import pytest
+
+from src.output import review as node
+
+
+def assessment(role):
+    return {
+        "status": "completed",
+        "claims": [{"claim_id": f"claim-{role}", "text": f"{role} 주장", "technology": "ITME",
+                    "kind": "fact", "evidence_ids": [f"e-{role}"]}],
+        "evidence": [{"evidence_id": f"e-{role}", "source_id": f"s-{role}", "run_id": "r5-test",
+                      "collection": "ecosystem", "quote": "합성 인용", "location": "p.1",
+                      "allowed_uses": [role]}],
+        "sources": [{"source_id": f"s-{role}", "run_id": "r5-test", "collection": "ecosystem",
+                     "allowed_uses": [role], "title": f"{role} 출처"}],
+        "gaps": [],
+    }
+
+
+@pytest.fixture
+def state(tmp_path):
+    return {"run_id": "r5-test", "run_config": {"runs_dir": str(tmp_path)},
+            "market": assessment("market")}
+
+
+def fill(path, result, reviewer="권예리"):
+    rows = list(csv.DictReader(path.open(encoding="utf-8-sig")))
+    for row in rows:
+        row["review_result"] = result
+        row["reviewer"] = reviewer
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def test_first_pass_writes_worksheet_and_waits(state, tmp_path):
+    """판정이 비어 있으면 통과시키지 않는다 — 검토 대기."""
+    update = node.review(state)
+
+    assert set(update) == {"validation", "review_status", "trace"}
+    assert update["review_status"] == "pending"
+    assert update["validation"]["pending_claims"] == ["claim-market"]
+    assert (tmp_path / "r5-test" / "review.csv").exists()
+
+
+def test_filled_worksheet_passes(state, tmp_path):
+    node.review(state)
+    fill(tmp_path / "r5-test" / "review.csv", "확인")
+
+    update = node.review(state)
+    assert update["review_status"] == "passed"
+    assert update["validation"]["reviewers"] == ["권예리"]
+    assert update["validation"]["claim_verdicts"]["claim-market"]["verdict"] == "확인"
+
+
+def test_rejected_claim_passes_review_but_is_listed_for_exclusion(state, tmp_path):
+    """§8 — 부결된 주장은 판정된 것이다. 사실 서술에서 빼도록 목록으로 남긴다."""
+    node.review(state)
+    fill(tmp_path / "r5-test" / "review.csv", "부결")
+
+    update = node.review(state)
+    assert update["review_status"] == "passed"
+    assert update["validation"]["rejected_claims"] == ["claim-market"]
+
+
+def test_unknown_verdict_becomes_an_error(state, tmp_path):
+    node.review(state)
+    fill(tmp_path / "r5-test" / "review.csv", "글쎄요")
+
+    errors = node.review(state)["validation"]["errors"]
+    assert any(error["kind"] == "판정 값 미상" for error in errors)
+
+
+def test_existing_worksheet_is_not_overwritten(state, tmp_path):
+    """재개할 때 사람이 채운 판정을 지우지 않는다."""
+    node.review(state)
+    path = tmp_path / "r5-test" / "review.csv"
+    fill(path, "확인")
+    before = path.read_text(encoding="utf-8")
+
+    node.review(state)
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_format_errors_survive_into_validation(state, tmp_path):
+    """형식 검사 결과가 같은 validation 에 실린다 — final_check 이 이걸 본다."""
+    state["market"]["claims"][0]["evidence_ids"] = ["e-missing"]
+
+    errors = node.review(state)["validation"]["errors"]
+    assert any(error["kind"] == "Evidence 없음" for error in errors)
+
+
+def test_review_reader_groups_rows_by_claim(state, tmp_path, capsys):
+    """읽기용 스크립트는 판정을 바꾸지 않는다. Claim 단위로 묶어 보여 주기만 한다."""
+    from scripts.review_reader import show
+
+    node.review(state)
+    path = tmp_path / "r5-test" / "review.csv"
+    before = path.read_text(encoding="utf-8")
+
+    assert show("r5-test", runs_dir=tmp_path, width=80) == 1
+    assert path.read_text(encoding="utf-8") == before      # 읽기 전용
+
+    out = capsys.readouterr().out
+    assert "claim-market" in out and "미판정" in out and "market 주장" in out
+
+    fill(path, "확인")
+    show("r5-test", runs_dir=tmp_path, width=80)
+    assert "확인 · 권예리" in capsys.readouterr().out
+    assert show("r5-test", runs_dir=tmp_path, only_pending=True, width=80) == 0
+
+
+def test_verdict_carries_from_the_ledger(tmp_path):
+    """§8 — 사람이 읽은 것이 그대로일 때만 판정을 옮긴다."""
+    first = {"run_id": "run-a", "run_config": {"runs_dir": str(tmp_path)},
+             "market": assessment("market")}
+    node.review(first)
+    fill(tmp_path / "run-a" / "review.csv", "확인")
+    node.review(first)                      # 채운 판정이 원장으로 올라간다
+
+    later = {"run_id": "run-b", "run_config": {"runs_dir": str(tmp_path)},
+             "market": assessment("market")}
+    update = node.review(later)
+
+    assert update["review_status"] == "passed"
+    assert update["validation"]["carried_claims"] == ["claim-market"]
+    assert update["validation"]["claim_verdicts"]["claim-market"]["carried_from"] == "run-a"
+
+
+def test_changed_claim_text_is_reviewed_again(tmp_path):
+    first = {"run_id": "run-a", "run_config": {"runs_dir": str(tmp_path)},
+             "market": assessment("market")}
+    node.review(first)
+    fill(tmp_path / "run-a" / "review.csv", "확인")
+    node.review(first)
+
+    changed = assessment("market")
+    changed["claims"][0]["text"] = "market 주장 (문장이 바뀌었다)"
+    update = node.review({"run_id": "run-c", "market": changed,
+                          "run_config": {"runs_dir": str(tmp_path)}})
+
+    assert update["review_status"] == "pending"
+    assert update["validation"]["carried_claims"] == []
+
+
+def test_no_carry_review_forces_a_fresh_review(tmp_path):
+    first = {"run_id": "run-a", "run_config": {"runs_dir": str(tmp_path)},
+             "market": assessment("market")}
+    node.review(first)
+    fill(tmp_path / "run-a" / "review.csv", "확인")
+    node.review(first)
+
+    update = node.review({"run_id": "run-d", "market": assessment("market"),
+                          "run_config": {"runs_dir": str(tmp_path), "no_carry_review": True}})
+
+    assert update["review_status"] == "pending"
+
+
+def test_ledger_records_what_was_judged(tmp_path):
+    """지문만 남기면 나중에 무엇을 보고 판정했는지 확인할 수 없다."""
+    state = {"run_id": "run-a", "run_config": {"runs_dir": str(tmp_path)},
+             "market": assessment("market")}
+    node.review(state)
+    fill(tmp_path / "run-a" / "review.csv", "확인")
+    node.review(state)
+
+    entry = next(iter(node.load_ledger(node.LEDGER).values()))
+    assert entry["claim_text"] == "market 주장" and entry["reviewer"] == "권예리"
+    assert entry["node"] == "market" and entry["evidence_ids"] == ["e-market"]

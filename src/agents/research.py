@@ -88,7 +88,7 @@ def _extract_gaps_from_text(text: str) -> List[Gap]:
                 role="research",
                 technology=tech_matched,
                 item=item,
-                reason="논문 본문 추출 미확인 영역",
+                reason="제공된 근거에서 확인하지 못함",
             )
         )
     return gap_objects
@@ -220,6 +220,7 @@ def research(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 6-3. Claim 구성: status=failed인 경우 규약에 따라 반드시 claims=[] 강제
     claims: List[Claim] = []
+    unbacked_gaps: List[Gap] = []
     if status != "failed":
         tq_text, itme_text = _split_technology_sections(generated_text)
 
@@ -228,24 +229,46 @@ def research(state: Dict[str, Any]) -> Dict[str, Any]:
             tq_cits = [cid for cid in HEX_CITATION_RE.findall(tq_text) if cid in cited_ids_set]
             itme_cits = [cid for cid in HEX_CITATION_RE.findall(itme_text) if cid in cited_ids_set]
 
-            claims.append(
-                Claim(
-                    claim_id=f"claim_research_tq_{run_id[:8]}",
-                    text=tq_text,
-                    technology="TurboQuant",
-                    kind="fact",
-                    evidence_ids=list(dict.fromkeys(tq_cits)),
+            # §6 — 근거가 없는 항목은 Claim 이 아니라 Gap 이다.
+            if tq_cits:
+                claims.append(
+                    Claim(
+                        claim_id=f"claim_research_tq_{run_id[:8]}",
+                        text=tq_text,
+                        technology="TurboQuant",
+                        kind="fact",
+                        evidence_ids=list(dict.fromkeys(tq_cits)),
+                    )
                 )
-            )
-            claims.append(
-                Claim(
-                    claim_id=f"claim_research_itme_{run_id[:8]}",
-                    text=itme_text,
-                    technology="ITME",
-                    kind="fact",
-                    evidence_ids=list(dict.fromkeys(itme_cits)),
+            else:
+                unbacked_gaps.append(
+                    Gap(
+                        role="research",
+                        technology="TurboQuant",
+                        item="TurboQuant 절 인용 근거 미확보",
+                        reason="본문 해당 절에 유효한 인용 ID 가 없다",
+                    )
                 )
-            )
+            # §6 — 근거가 없는 항목은 Claim 이 아니라 Gap 이다.
+            if itme_cits:
+                claims.append(
+                    Claim(
+                        claim_id=f"claim_research_itme_{run_id[:8]}",
+                        text=itme_text,
+                        technology="ITME",
+                        kind="fact",
+                        evidence_ids=list(dict.fromkeys(itme_cits)),
+                    )
+                )
+            else:
+                unbacked_gaps.append(
+                    Gap(
+                        role="research",
+                        technology="ITME",
+                        item="ITME 절 인용 근거 미확보",
+                        reason="본문 해당 절에 유효한 인용 ID 가 없다",
+                    )
+                )
         else:
             # 섹션 분리가 안 된 경우 fallback 단일 Claim
             claims.append(
@@ -259,7 +282,7 @@ def research(state: Dict[str, Any]) -> Dict[str, Any]:
             )
 
     # 6-4. Gap 구성
-    gap_objects = _extract_gaps_from_text(generated_text)
+    gap_objects = _extract_gaps_from_text(generated_text) + unbacked_gaps
 
     # 원문 미확보 기술에 대한 명시적 Gap 기록
     for tech in TECHS:

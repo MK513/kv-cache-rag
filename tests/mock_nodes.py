@@ -39,7 +39,7 @@ def setup(state):
 def synthesis(state):
     """종합. gaps 는 합류분에 자기 공백을 순차 병합한다(설계서 §7)."""
     return {"synthesis": {"agreements": ["합성 일치"],
-                          "conflicts": [{"perspective": "TRL", "favors": "판단보류", "why": "합성"}],
+                          "conflicts": [{"perspective": "TRL", "why": "합성"}],
                           "gaps": [g["item"] for g in state["gaps"]],
                           "combination_hypothesis": "합성 가설"},
             "gaps": state["gaps"] + [{"role": "synthesis", "technology": "ITME",

@@ -334,3 +334,58 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def publish(state) -> dict:
+    """레이아웃 확인 후 제출본 저장 (설계서 §9, 부록 A 의 `Z` 노드).
+
+    Markdown 을 실행 저장소에 남기고, 검증을 통과했을 때만 제출본 PDF 를 만든다.
+    §8 — 검토용 초안은 별도 경로에 저장하며 제출본과 구분한다. 제출본은
+    `runs/<run_id>/final/` 에 둔다.
+
+    PDF 의존성(weasyprint·pango)이 없어도 그래프를 죽이지 않는다. 그 사실을
+    submission.json 과 trace 에 남기고 Markdown 경로만 돌려준다.
+    """
+    from src.state import run_dir
+    from src.tools.web_store import save_json
+
+    directory = run_dir(state)
+    markdown_path = directory / "report.md"
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.write_text(state.get("report", ""), encoding="utf-8")
+
+    errors = (state.get("validation") or {}).get("errors") or []
+    final_path = directory / "final" / FINAL_FILENAME
+
+    try:
+        result = build_submission(
+            markdown_path=markdown_path,
+            final_path=final_path,
+            validation_errors=errors,
+        )
+    except Exception as exc:
+        # 선택 의존성이다. weasyprint 가 깔려 있어도 libpango 같은 시스템 라이브러리가
+        # 없으면 OSError 가 난다. PDF 하나 때문에 실행 전체를 버리지 않는다.
+        result = {
+            "generated": False,
+            "reason": f"{type(exc).__name__}: {exc}".strip()[:300],
+            "validation_errors": [],
+            "checks": quality_checks(state.get("report", "")),
+            "path": None,
+        }
+
+    save_json(directory / "submission.json", result)
+
+    paths = [str(markdown_path)]
+    if result["generated"]:
+        paths.append(result["path"])
+
+    return {
+        "report_paths": paths,
+        "trace": [{
+            "node": "publish",
+            "status": "ok" if result["generated"] else "partial",
+            "attempt": 1,
+            "reason": result["reason"],
+            "checks": {check["check"]: check["passed"] for check in result["checks"]},
+        }],
+    }

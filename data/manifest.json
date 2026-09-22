@@ -131,7 +131,7 @@
       ],
       "scope": "direct",
       "local_path": "data/raw/turboquant-blog.html",
-      "sha256": "bfb27f1b5889587de73a028b8247e41153e995e861cec916e2966764b26c9da5",
+      "sha256": "ab1b43a80bcc56b1dd547a900ecf257aac8ffdb45f8441d8ac894f144e1cf169",
       "bytes": 186857,
       "retrieved_at": "2026-09-22",
       "publisher": "Google Research Blog",

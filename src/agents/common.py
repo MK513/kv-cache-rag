@@ -4,8 +4,6 @@
 같은 모양이라 여기 한 번만 쓴다. 각 노드는 질의와 지시문만 갖는다.
 """
 
-import re
-
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
@@ -31,23 +29,3 @@ def run_node(instruction: str, domain: str, context: str) -> str:
     chain = _TEMPLATE | get_llm() | StrOutputParser()
     return chain.invoke({"instruction": instruction, "rules": GROUND_RULES,
                          "domain": domain, "context": context})
-
-
-def extract_citations(text: str, valid_ids: set[str]) -> tuple[list[str], list[str]]:
-    """본문의 [id] 를 (실재 ID, 존재하지 않는 ID) 로 가른다."""
-    found = set(re.findall(r"\[([0-9a-f]{12})\]", text))
-    return sorted(found & valid_ids), sorted(found - valid_ids)
-
-
-def extract_gaps(text: str) -> list[str]:
-    """본문 마지막의 '근거 공백:' 줄을 목록으로 뽑는다."""
-    m = re.search(r"근거\s*공백\s*:\s*(.+)\s*$", text, re.MULTILINE)
-    if not m or m.group(1).strip() in ("없음", "-"):
-        return []
-    return [g.strip() for g in m.group(1).split("|") if g.strip()]
-
-
-def perspective(text: str, valid_ids: set[str]) -> dict:
-    """관점 dict 공통 구조 {text, citations, gaps} + 검증용 bad_citations."""
-    cited, bad = extract_citations(text, valid_ids)
-    return {"text": text, "citations": cited, "gaps": extract_gaps(text), "bad_citations": bad}

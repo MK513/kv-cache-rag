@@ -60,6 +60,18 @@ def fetch_page(url: str, *, max_bytes: int, timeout: float) -> FetchedPage:
         raise ValueError('redirect limit exceeded')
 
 
+NON_CONTENT = (
+    'there was an error while loading',
+    'please reload this page',
+    'enable javascript',
+    'javascript is disabled',
+    'we use cookies',
+    'accept all cookies',
+    'sign in to continue',
+    'rate limit exceeded',
+)
+
+
 def extract_body(page: FetchedPage) -> dict:
     """Extract paragraphs plus source metadata. Missing dates remain unknown."""
     content_type = next((v for k, v in page.headers.items() if k.lower() == 'content-type'), '').lower()
@@ -104,8 +116,13 @@ def extract_body(page: FetchedPage) -> dict:
         if tag.find_parent(['p', 'li', 'blockquote', 'pre']):
             continue
         text = ' '.join(tag.get_text(' ', strip=True).split())
-        if text:
-            paragraphs.append((f'paragraph:{len(paragraphs) + 1}', text))
+        if not text:
+            continue
+        # 클라이언트 렌더 실패·쿠키 안내 같은 상용구는 인용할 원문이 아니다.
+        # 남겨 두면 "There was an error while loading." 이 그대로 Evidence 가 된다.
+        if any(marker in text.lower() for marker in NON_CONTENT):
+            continue
+        paragraphs.append((f'paragraph:{len(paragraphs) + 1}', text))
     if not paragraphs:
         text = ' '.join(container.get_text(' ', strip=True).split())
         paragraphs = [('paragraph:1', text)] if text else []

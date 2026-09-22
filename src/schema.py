@@ -18,7 +18,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-Technology = Literal["TurboQuant", "ITME"]
+# "both" 는 두 기술을 함께 다루는 Claim·Gap 용이다. 설계서 §3 의 검색 도구 계약이
+# 이미 쓰는 값이며, 종합 단계가 관점별로 갈리는 지점을 따로 정리한다(§5).
+Technology = Literal["TurboQuant", "ITME", "both"]
 Kind = Literal["fact", "inference", "hypothesis"]
 Status = Literal["completed", "partial", "failed"]
 Collection = Literal["papers_core", "ecosystem", "context", "web"]
@@ -125,24 +127,25 @@ class Assessment(BaseModel):
 
 
 class Conflict(BaseModel):
-    """한 관점에서 두 기술의 평가가 갈리는 지점."""
+    """관점에 따라 평가 내용이 실제로 달라지는 지점."""
 
     perspective: Literal["TRL", "시장성", "이해관계자", "도메인"]
-    favors: Literal["TurboQuant", "ITME", "판단보류"] = Field(
-        description="이 관점의 근거가 상대적으로 유리하게 읽히는 쪽. 종합 승자가 아니다."
-    )
-    why: str = Field(description="관점이 갈리는 이유와 근거")
+    why: str = Field(description="어떤 근거 또는 조건 때문에 관점별 평가가 달라지는지. "
+                                 "기술 우열이나 종합 승자를 판정하지 않는다.")
 
 
 class Synthesis(BaseModel):
-    agreements: list[str] = Field(description="네 관점이 공통으로 가리키는 사실")
-    conflicts: list[Conflict] = Field(
-        min_length=1, description="관점에 따라 평가가 갈리는 지점. 최소 1건 필수."
-    )
-    gaps: list[str] = Field(description="관점별 gaps 병합 + 결합 효과 등 실측 없는 항목")
+    """종합 결과. §5 — 점수를 합쳐 순위를 매기지 않는다."""
+
+    agreements: list[str] = Field(default_factory=list,
+                                  description="여러 관점에서 공통으로 확인되는 사실 또는 방향")
+    # §5 — 상충하는 의견을 억지로 만들지 않는다. 그래서 빈 목록을 허용한다.
+    conflicts: list[Conflict] = Field(default_factory=list,
+                                      description="관점별 평가가 실제로 달라지는 지점")
+    gaps: list[str] = Field(default_factory=list,
+                            description="관점별 근거 공백과 아직 실증되지 않은 항목")
     combination_hypothesis: str = Field(
-        description="TurboQuant+ITME 결합 가설. 추론임을 명시. 본문이 아니라 시사점에만 쓴다."
-    )
+        description="TurboQuant+ITME 결합 가설. 공개 결합 실험이 없으면 추론임을 명시한다(§2·§5).")
 
 
 class Event(BaseModel):

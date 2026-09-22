@@ -14,7 +14,8 @@ sources.json 에 적힌 출처를 내려받아
 사용법:
     pip install requests pypdf beautifulsoup4
     python scripts/prepare_sources.py            # 내려받기 + 매니페스트 작성
-    python scripts/prepare_sources.py --verify   # 재검증만 (해시 비교)
+    python scripts/prepare_sources.py            # 기본: 해시만 검증 (재수집 안 함)
+    python scripts/prepare_sources.py --refresh  # 원문 재수집 + 매니페스트 갱신
 """
 from __future__ import annotations
 
@@ -71,7 +72,11 @@ def html_to_text(path: Path) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--verify", action="store_true", help="다시 내려받지 않고 해시만 검증")
+    ap.add_argument("--verify", action="store_true",
+                    help="(기본 동작) 다시 내려받지 않고 해시만 검증")
+    ap.add_argument("--refresh", action="store_true",
+                    help="원문을 다시 내려받고 매니페스트를 갱신한다. 원문이 바뀌면 chunk_id 가 "
+                         "전부 달라져 goldenset 재라벨링이 필요하다")
     args = ap.parse_args()
 
     spec = json.loads((ROOT / "sources.json").read_text(encoding="utf-8"))
@@ -83,7 +88,7 @@ def main() -> int:
         ext = "pdf" if s["type"] == "pdf" else "html"
         raw_path = RAW / f"{s['id']}.{ext}"
 
-        if not args.verify or not raw_path.exists():
+        if args.refresh or not raw_path.exists():
             try:
                 print(f"[get ] {s['id']:<26} {s['url']}")
                 download(s["url"], raw_path)

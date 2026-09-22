@@ -1,6 +1,8 @@
-"""R5 pdf.py 단위 테스트."""
+"""pdf.py 단위 테스트 — 담당: R5
 
-from pathlib import Path
+제출 차단 규칙은 `tests/test_r5_publish.py` 가 노드 경로로 검증한다. 여기는 CLI 진입점
+(`python -m src.output.pdf`)에서만 닿는 가드와 품질 점검 함수만 본다.
+"""
 
 from src.output import pdf
 
@@ -28,28 +30,6 @@ def _valid_markdown():
 
 - 테스트 출처
 """
-
-
-def test_validation_error_blocks_submission(tmp_path):
-    """validation error가 있으면 제출본을 만들면 안 된다."""
-    md = tmp_path / "report.md"
-    md.write_text(_valid_markdown(), encoding="utf-8")
-
-    result = pdf.build_submission(
-        markdown_path=md,
-        final_path=tmp_path / "final.pdf",
-        validation_errors=[
-            {
-                "node": "domain_assessment",
-                "kind": "Evidence 없음",
-                "ids": ["evidence-missing"],
-            }
-        ],
-    )
-
-    assert result["generated"] is False
-    assert result["reason"] == "validation_errors 존재"
-    assert result["path"] is None
 
 
 def test_missing_markdown_blocks_submission(tmp_path):

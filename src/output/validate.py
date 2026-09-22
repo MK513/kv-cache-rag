@@ -2,18 +2,7 @@
 
 LLM 채점이 아니라 결정적 검사를 수행한다.
 
-지원 구조
-1) 구형 Assessment
-   {text, citations, gaps, bad_citations}
-
-2) 신형 Assessment
-   {
-       claims: [...],
-       evidence: [...],
-       sources: [...],
-       gaps: [...],
-       status: ...
-   }
+검사 대상은 `schema.Assessment` 다 — claims / evidence / sources / gaps / status.
 
 자동 검증은 구조와 출처 연결을 확인한다.
 Claim 내용이 실제 근거에서 의미적으로 도출되는지는
@@ -29,52 +18,6 @@ RAG_NODES = {
 }
 
 WEB_NODES = {"stakeholder"}
-
-
-def _build_index():
-    """RAG index를 실제 검증 시점에만 로드한다.
-
-    validate.py import 시점에 pdfplumber 등 R2 의존성을 불러오지 않도록
-    지연 import한다. 단위 테스트에서는 이 함수를 monkeypatch한다.
-    """
-    from src.rag.index import build
-
-    return build()
-
-
-def _legacy_rag_errors(
-    node_name: str,
-    assessment: dict,
-    valid_chunk_ids: set[str],
-) -> list[dict]:
-    """구형 {text, citations, bad_citations} 구조를 검사한다."""
-    errors = []
-
-    citations = assessment.get("citations") or []
-    bad = set(assessment.get("bad_citations") or [])
-
-    # common.py를 거치지 않은 데이터도 방어적으로 다시 검사
-    bad.update(
-        citation
-        for citation in citations
-        if citation not in valid_chunk_ids
-    )
-
-    if bad:
-        errors.append({
-            "node": node_name,
-            "kind": "없는 인용 ID",
-            "ids": sorted(bad),
-        })
-
-    if not citations:
-        errors.append({
-            "node": node_name,
-            "kind": "인용 누락",
-            "ids": [],
-        })
-
-    return errors
 
 
 def _structured_errors(
@@ -231,9 +174,14 @@ def _structured_errors(
     return errors
 
 
-def check(state, stage: str) -> dict:
-    """현재 State의 자동 검증 결과를 반환한다."""
-    valid_chunk_ids = set(_build_index()["chunks"])
+def check(state) -> dict:
+    """현재 State의 자동 검증 결과를 State 필드 `validation` 으로 반환한다.
+
+    설계서 §8 *형식 검사* — Claim에 근거 ID가 연결됐는지, ID가 이번 실행에서 확보한
+    자료인지, 노드별 허용 자료인지 확인한다. 내용 검토(사람)는 `review.py` 가 맡는다.
+
+    재시도 횟수는 세지 않는다. 부록 A: *재시도는 노드 내부의 최대 1회 처리다.*
+    """
     current_run_id = state.get("run_id")
 
     errors = []
@@ -252,36 +200,24 @@ def check(state, stage: str) -> dict:
         if not assessment:
             continue
 
-        # 신형 구조
-        if "claims" in assessment:
-            errors.extend(
-                _structured_errors(
-                    node_name=node_name,
-                    assessment=assessment,
-                    current_run_id=current_run_id,
-                )
+        errors.extend(
+            _structured_errors(
+                node_name=node_name,
+                assessment=assessment,
+                current_run_id=current_run_id,
             )
-
-        # 구형 RAG 구조
-        elif node_name in RAG_NODES:
-            errors.extend(
-                _legacy_rag_errors(
-                    node_name=node_name,
-                    assessment=assessment,
-                    valid_chunk_ids=valid_chunk_ids,
-                )
-            )
+        )
 
     # conflicts == [] 는 정상일 수 있으므로 오류로 처리하지 않는다.
 
     return {
-        "validation_errors": errors,
-        "validation_round": (
-            state.get("validation_round", 0)
-            + (1 if stage == "post_synthesis" else 0)
-        ),
+        "validation": {
+            "errors": errors,
+            "checked_nodes": node_names,
+        },
         "trace": [{
-            "node": f"validate:{stage}",
+            "node": "validate",
+            "status": "failed" if errors else "ok",
             "errors": len(errors),
         }],
     }

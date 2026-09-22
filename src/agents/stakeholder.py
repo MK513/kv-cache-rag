@@ -43,6 +43,29 @@ def _write_draft(*, instruction, domain, context, feedback):
     ])
 
 
+def _diagnose(missing, technology, allowed, visible_ids, all_evidence):
+    """거부된 인용 ID 마다 이유를 붙인다.
+
+    "unknown/disallowed evidence IDs: [...]" 만 돌려주면 모델이 없는 ID 인지, 기술이
+    어긋난 건지, 한 글자 흘린 건지 구분하지 못해 수정 1회를 그냥 날린다.
+    """
+    lines = []
+    for eid in sorted(missing):
+        near = next((v for v in visible_ids
+                     if v != eid and (v.startswith(eid) or eid.startswith(v))), None)
+        if near:
+            lines.append(f'{eid}: ID 를 잘못 옮겨 적었다. 정확한 ID 는 {near} 다')
+        elif eid not in all_evidence:
+            lines.append(f'{eid}: 이번 실행에 없는 ID 다. 제공된 근거의 ID 만 쓴다')
+        elif eid not in visible_ids:
+            lines.append(f'{eid}: 모델 입력에서 제외된 근거라 인용할 수 없다')
+        else:
+            owner = sorted(t for t, ids in allowed.items() if eid in ids)
+            lines.append(f'{eid}: {"/".join(owner) or "다른 기술"} 자료로 수집됐다. '
+                         f'{technology} 주장의 근거로 쓸 수 없다')
+    return '거부된 인용:\n- ' + '\n- '.join(lines)
+
+
 def make_stakeholder(store: WebEvidenceStore, *, writer=None):
     """Inject run-owned store and optional structured writer for graph/testing."""
     writer = writer or _write_draft
@@ -140,7 +163,8 @@ def make_stakeholder(store: WebEvidenceStore, *, writer=None):
                     for item in draft.claims:
                         missing = set(item.evidence_ids) - (allowed[item.technology] & visible_ids)
                         if missing:
-                            raise ValueError(f'unknown/disallowed evidence IDs: {sorted(missing)}')
+                            raise ValueError(_diagnose(missing, item.technology, allowed,
+                                                       visible_ids, all_evidence))
                         data = item.model_dump()
                         for eid in item.evidence_ids:
                             evidence = all_evidence[eid]
