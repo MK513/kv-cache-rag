@@ -92,6 +92,18 @@ def _used_sources(state: dict) -> list[dict]:
     return list(used.values())
 
 
+def _date(value) -> str:
+    """ISO 타임스탬프를 날짜까지만 남긴다. §9 는 게시일·조회일을 요구하며 초 단위는 노이즈다."""
+    text = str(value or "").strip()
+    return text[:10] if len(text) >= 10 and text[4] == "-" and text[7] == "-" else text
+
+
+def _page_key(location: str):
+    """p.5 가 p.15 뒤로 가지 않게 숫자로 정렬한다."""
+    digits = "".join(c for c in str(location) if c.isdigit())
+    return (int(digits) if digits else 0, str(location))
+
+
 def _format_structured_sources(sources: list[dict], numbers: dict, pages: dict) -> str:
     """신형 Source 구조를 Markdown REFERENCE 로 변환한다. 번호는 본문 인용과 맞춘다."""
     lines = ["## REFERENCE", ""]
@@ -103,14 +115,18 @@ def _format_structured_sources(sources: list[dict], numbers: dict, pages: dict) 
     def entry(source: dict) -> str:
         number = numbers.get(source.get("source_id"), "?")
         title = source.get("title") or source.get("source_id") or "제목 미확인"
-        published = source.get("published") or source.get("published_at") or "날짜 미확인"
+        version = str(source.get("version") or "")
+        # 논문은 게시일 대신 arXiv 버전이 연도를 담는다(§9 — "연도 ... 또는 arXiv 버전").
+        # 버전을 날짜 자리에 쓰면 뒤에서 다시 적지 않는다.
+        published = _date(source.get("published") or source.get("published_at"))
+        head = published or version or "날짜 미확인"
         bits = [b for b in (source.get("venue") or source.get("publisher") or "",
-                            str(source.get("version") or "")) if b]
-        cited = sorted(pages.get(source.get("source_id"), []))
+                            version if published else "") if b]
+        cited = sorted(pages.get(source.get("source_id"), []), key=_page_key)
         if cited:
             bits.append("인용 " + ", ".join(cited))
         url = source.get("url") or ""
-        return (f"- [{number}] {title} ({published})"
+        return (f"- [{number}] {title} ({head})"
                 + (f" · {' · '.join(bits)}" if bits else "")
                 + (f"  \n  {url}" if url else ""))
 
@@ -132,9 +148,9 @@ def _format_structured_sources(sources: list[dict], numbers: dict, pages: dict) 
             institution = (source.get("institution") or source.get("organization")
                            or source.get("source_type") or "출처 미확인")
             lines.append(
-                f"- [{number}] {institution} ({source.get('published_at') or '게시일 미확인'}). "
+                f"- [{number}] {institution} ({_date(source.get('published_at')) or '게시일 미확인'}). "
                 f"{source.get('title') or '제목 미확인'}. "
-                f"조회 {source.get('retrieved_at') or '조회일 미확인'}"
+                f"조회 {_date(source.get('retrieved_at')) or '조회일 미확인'}"
                 + (f"  \n  {source.get('url')}" if source.get("url") else ""))
 
     return "\n".join(lines)
