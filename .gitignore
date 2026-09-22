@@ -11,7 +11,9 @@ data/index/
 # 모델·임베딩 캐시 (HuggingFace, CacheBackedEmbeddings)
 .cache/
 models/
-# data/web_cache/ 는 제외하지 않는다 — 이해관계자 웹 조회 스냅샷은 재현성을 위해 커밋한다.
+# R3: 실제 실행 원문은 실행 저장소에 보관한다. 합성 증빙만 docs/evidence/r3 에 커밋한다.
+/runs/
+data/web_cache/
 
 # --- 비밀 ---------------------------------------------------------------------
 .env

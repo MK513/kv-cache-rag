@@ -1,78 +1,123 @@
-"""하이브리드 검색 — 담당: R2 (설계서 §4)
+"""R3: exact dense cosine retrieval with explicit collection/role boundaries.
 
-dense 는 **원문 질의**, BM25 는 **영어 키워드 변환 질의** 를 쓴다.
-두 retriever 에 서로 다른 질의를 넣어야 해서 RRF 를 직접 융합한다
-(EnsembleRetriever 는 같은 질의를 양쪽에 넘긴다).
-
-기술별 검색을 분리할 수 있게 technology 필터를 둔다 — 한 기술에만 근거가
-몰리는 확증 편향을 막는다(설계서 §5).
+The small (<200-page) corpus is searched in full before metadata filtering;
+this avoids losing a technology when the nearest neighbours belong to another.
 """
+import math
+import numpy as np
 
-from src.rag.index import build
-from src.rag.query_kw import translated
-from src.settings import settings
-
-TRACE: list[dict] = []   # 키워드 변환 기록. graph 가 회수해 State.trace 에 넣는다.
-
-
-def _rrf(ranked_lists: list[tuple[list, float]], k: int) -> list:
-    """Reciprocal Rank Fusion. score(d) = Σ weight / (k + rank)"""
-    scores, seen = {}, {}
-    for docs, weight in ranked_lists:
-        for rank, d in enumerate(docs, 1):
-            cid = d.metadata["chunk_id"]
-            seen[cid] = d
-            scores[cid] = scores.get(cid, 0.0) + weight / (k + rank)
-    return [seen[c] for c in sorted(scores, key=scores.get, reverse=True)]
+COLLECTIONS = frozenset({'papers_core', 'ecosystem', 'context'})
+TECHNOLOGIES = frozenset({'TurboQuant', 'ITME'})
+ROLE_COLLECTIONS = {
+    'research': ('papers_core',), 'maturity': ('papers_core',),
+    'market': ('ecosystem',), 'domain': ('papers_core', 'context'),
+}
+ROLE_SCOPES = {
+    'research': {'direct'}, 'maturity': {'direct', 'comparison'},
+    'market': {'direct', 'ecosystem'},
+    'domain': {'direct', 'comparison', 'secondary'},
+}
+TRACE: list[dict] = []  # Deprecated import compatibility; no mutable execution log.
 
 
-def search(query: str, collection: str, technology: str = "both",
-           top_k: int | None = None, mode: str = "rrf",
+def build():
+    # Import lazily: mock-index users need neither PDF parsing nor a downloaded E5.
+    from src.rag.index import build as build_index
+    return build_index()
+
+
+def validate_request(query, collection, technology, top_k, perspective=None):
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError('query must be nonempty')
+    if collection not in COLLECTIONS:
+        raise ValueError(f'unknown collection: {collection}')
+    if technology not in TECHNOLOGIES | {'both'}:
+        raise ValueError(f'unknown technology: {technology}')
+    if type(top_k) is not int or not 1 <= top_k <= 100:
+        raise ValueError('top_k must be an integer in 1..100')
+    if perspective is not None:
+        if perspective not in ROLE_COLLECTIONS or collection not in ROLE_COLLECTIONS[perspective]:
+            raise ValueError(f'collection {collection} forbidden for {perspective}')
+
+
+def permitted(metadata, collection, technology, perspective=None):
+    """Validate metadata, then filter a well-formed but irrelevant record."""
+    if metadata.get('collection') != collection:
+        raise ValueError('returned collection differs from requested collection')
+    for key in ('applies_to', 'perspectives'):
+        value = metadata.get(key)
+        if not isinstance(value, list) or not value or not all(isinstance(x, str) for x in value):
+            raise ValueError(f'missing/invalid metadata: {key}')
+    if not set(metadata['applies_to']) <= TECHNOLOGIES:
+        raise ValueError('invalid technology metadata')
+    if not metadata.get('source_id', metadata.get('source')) or not metadata.get('chunk_id'):
+        raise ValueError('missing source/chunk metadata')
+    if metadata.get('scope') not in {'direct', 'comparison', 'ecosystem', 'secondary'}:
+        raise ValueError('missing/invalid metadata: scope')
+    if technology != 'both' and technology not in metadata['applies_to']:
+        return False
+    if perspective and perspective not in metadata['perspectives']:
+        return False
+    if perspective and metadata['scope'] not in ROLE_SCOPES[perspective]:
+        return False
+    if collection == 'context' and metadata['scope'] not in {'comparison', 'secondary'}:
+        return False
+    return True
+
+
+def validate_hits(hits, collection, technology, perspective=None):
+    """Second boundary check for tool consumers, including replaced backends."""
+    for hit in hits:
+        if not permitted(hit, collection, technology, perspective):
+            raise ValueError('returned hit violates role/technology scope')
+        if not isinstance(hit.get('text'), str) or not hit['text'].strip():
+            raise ValueError('empty returned text')
+        score = hit.get('cosine_score')
+        if not isinstance(score, (int, float)) or not math.isfinite(score) or not -1.00001 <= score <= 1.00001:
+            raise ValueError('invalid cosine_score')
+    return hits
+
+
+def search(query: str, collection: str, technology: str = 'both',
+           top_k: int | None = None, mode: str = 'dense',
            perspective: str | None = None) -> list[dict]:
-    """mode: 'rrf'(기본) | 'dense'  — eval 에서 두 모드를 분리 비교한다.
-
-    perspective: sources.json 의 perspectives 로 문서를 거른다. 비교군 논문이
-    기술 조사의 1차 근거로 올라오는 것을 막는다.
-    """
-    cfg = settings()["retrieval"]
-    top_k = top_k or cfg["top_k"]
-    store = build()["stores"].get(collection)
-    if not store:
+    """Return dense cosine hits. RRF requires new measured evidence and is disabled."""
+    top_k = 5 if top_k is None else top_k
+    validate_request(query, collection, technology, top_k, perspective)
+    if mode != 'dense':
+        raise ValueError('only mode=dense is supported; RRF/BM25 need evaluation evidence')
+    store = build()['stores'].get(collection)
+    if store is None:
         return []
-
-    # 필터는 랭킹 뒤에 적용되므로, 필터가 걸리면 풀을 키워야 실효 top_k 가 유지된다.
-    # papers_core 는 ITME 계열 3편 : TurboQuant 계열 1편으로 비대칭이라
-    # 풀이 작으면 한 기술 근거가 통째로 밀려난다(설계서 §5 확증 편향 완화).
-    pool = top_k * (4 if (technology == "both" and not perspective) else 16)
-    dense_docs = store["dense"].similarity_search(query, k=pool)
-
-    if mode == "dense":
-        ranked = dense_docs
-    else:
-        kw, changed = translated(query)
-        if changed:
-            TRACE.append({"tool": "query_kw", "ko": query, "en": kw})
-        ranked = _rrf(
-            [(dense_docs, cfg["dense_weight"]), (store["bm25"].invoke(kw), cfg["sparse_weight"])],
-            cfg["rrf_k"],
-        )
-
-    if technology != "both":
-        ranked = [d for d in ranked
-                  if technology in (d.metadata.get("applies_to") or [technology])]
-    if perspective:
-        ranked = [d for d in ranked
-                  if perspective in (d.metadata.get("perspectives") or [perspective])]
-
-    return [
-        {
-            "chunk_id": d.metadata["chunk_id"],
-            "collection": d.metadata["collection"],
-            "source": d.metadata["source"],
-            "applies_to": d.metadata.get("applies_to", []),
-            "scope": d.metadata.get("scope", ""),
-            "page": d.metadata["page"],
-            "text": d.page_content,
-        }
-        for d in ranked[:top_k]
-    ]
+    dense = store['dense']
+    n = dense.index.ntotal
+    if not n:
+        return []
+    query_vector = np.asarray(dense.embeddings.embed_query(query), dtype=np.float32)
+    if not np.isfinite(query_vector).all() or not np.isclose(np.linalg.norm(query_vector), 1, atol=1e-4):
+        raise ValueError('R2 query embeddings must be normalized for cosine search')
+    # Validate actual stored vectors, not just a config flag. Never label raw L2 cosine.
+    vectors = dense.index.reconstruct_n(0, n)
+    if not np.isfinite(vectors).all() or not np.allclose(np.linalg.norm(vectors, axis=1), 1, atol=1e-4):
+        raise ValueError('R2 index embeddings must be normalized for cosine search')
+    import faiss
+    metric = dense.index.metric_type
+    if metric not in {faiss.METRIC_L2, faiss.METRIC_INNER_PRODUCT}:
+        raise ValueError('unsupported FAISS metric')
+    ranked = dense.similarity_search_with_score_by_vector(query_vector.tolist(), k=n)
+    hits = []
+    for doc, raw in ranked:
+        meta = doc.metadata
+        if not permitted(meta, collection, technology, perspective):
+            continue
+        source = meta.get('source_id') or meta['source']
+        score = float(raw) if metric == faiss.METRIC_INNER_PRODUCT else 1.0 - float(raw) / 2.0
+        hits.append({
+            'chunk_id': meta['chunk_id'], 'source_id': source, 'source': source,
+            'collection': collection, 'page': meta['page'], 'text': doc.page_content,
+            'cosine_score': max(-1.0, min(1.0, score)),
+            'applies_to': list(meta['applies_to']), 'perspectives': list(meta['perspectives']),
+            'scope': meta['scope'],
+        })
+    hits.sort(key=lambda h: (-h['cosine_score'], h['chunk_id']))
+    return validate_hits(hits[:top_k], collection, technology, perspective)
