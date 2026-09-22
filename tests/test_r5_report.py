@@ -229,3 +229,38 @@ def test_cached_model_responses_are_disclosed(monkeypatch):
     limits = limits[limits.index("## 6. 한계"):]
 
     assert "모델 응답 재사용: 5건" in limits and "새로 생성 1건" in limits
+
+
+def test_inline_citations_become_reference_numbers(monkeypatch):
+    """본문의 chunk_id 는 검증용 내부 값이다. 독자는 REFERENCE 번호를 읽어야 한다."""
+    monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
+
+    state = _state()
+    state["run_config"]["sources"] = [
+        {"id": "s-maturity", "title": "ITME 원문", "url": "https://arxiv.org/abs/2606.12556",
+         "version": "arXiv:2606.12556v2", "publisher": "arXiv"},
+    ]
+    state["maturity"]["claims"][0]["text"] = "ITME 는 1.80배를 보고한다 [aaaaaaaaaaaa]."
+    state["maturity"]["evidence"][0] |= {"evidence_id": "aaaaaaaaaaaa", "location": "p.7",
+                                         "collection": "papers_core"}
+    state["maturity"]["claims"][0]["evidence_ids"] = ["aaaaaaaaaaaa"]
+    state["maturity"]["sources"][0]["collection"] = "papers_core"
+
+    markdown = report_module.report(state)["report"]
+
+    assert "[aaaaaaaaaaaa]" not in markdown          # 내부 ID 가 본문에 남지 않는다
+    assert "ITME 는 1.80배를 보고한다 [1]." in markdown
+    reference = markdown[markdown.index("## REFERENCE"):]
+    assert "- [1] ITME 원문" in reference
+    assert "arXiv:2606.12556v2" in reference and "인용 p.7" in reference   # §9 항목
+    assert "https://arxiv.org/abs/2606.12556" in reference
+
+
+def test_unknown_citation_id_is_left_alone(monkeypatch):
+    """번호를 못 찾으면 원래 ID 를 남긴다. 조용히 지우면 인용이 사라진 것처럼 보인다."""
+    monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
+
+    state = _state()
+    state["maturity"]["claims"][0]["text"] = "근거 없는 인용 [ffffffffffff]."
+
+    assert "[ffffffffffff]" in report_module.report(state)["report"]

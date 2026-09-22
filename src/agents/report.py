@@ -10,6 +10,8 @@
 - 최종 REFERENCE는 reference.py가 실제 사용 근거를 기준으로 생성한다.
 """
 
+import re
+
 from src.llm import llm_report, model_name
 from src.output import reference
 
@@ -21,6 +23,18 @@ def _bullets(items) -> str:
 
 PERSPECTIVE_NODES = ["research", "maturity", "market", "stakeholder", "domain_assessment"]
 KIND_LABEL = {"fact": "사실", "inference": "추론", "hypothesis": "가설"}
+CITATION_RE = re.compile(r"\[([0-9a-f]{12})\]")
+
+
+def _number_citations(markdown: str, marks: dict) -> str:
+    """본문의 검증용 ID 를 REFERENCE 번호로 바꾼다.
+
+    `[cefcd0973374]` 는 chunk_id 다 — validate 가 대조하는 내부 값이라 파이프라인에는
+    필요하지만 독자는 어느 출처인지 알 수 없다. REFERENCE 에도 그 ID 가 없다.
+    번호를 못 찾으면 원래 ID 를 남긴다. 조용히 지우면 인용이 사라진 것처럼 보인다.
+    """
+    return CITATION_RE.sub(
+        lambda m: f"[{marks[m.group(1)]}]" if m.group(1) in marks else m.group(0), markdown)
 
 
 def _held(state: dict) -> str:
@@ -179,6 +193,7 @@ def report(state) -> dict:
 
     summary = _summary(synthesis)
     conflicts = _conflicts(synthesis.get("conflicts") or [])
+    references, marks = reference.build(approved | {"run_config": config})
 
     md = f"""# KV cache 최적화 기술 다관점 평가
 
@@ -273,8 +288,9 @@ ITME를 대상으로, TRL·시장성·이해관계자·도메인 네 관점에�
 - Claim과 인용 근거의 내용적 적합성은 내용 검토 워크시트에서 사람이 확인한다.
 - 확증 편향을 줄이기 위해 기술별 검색량을 균형 있게 유지하고, 성능 향상뿐 아니라 잔여 비용과 근거 공백도 함께 기록한다.
 
-{reference.build(state=approved)}
+{references}
 """
+    md = _number_citations(md, marks)
 
     return {
         "report": md,

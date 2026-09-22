@@ -53,7 +53,7 @@ def _state():
 
 def test_only_used_source_is_in_reference():
     """실제 Claim이 사용한 Source만 REFERENCE에 포함되어야 한다."""
-    output = reference.build(state=_state())
+    output, _ = reference.build(_state())
 
     assert "Used Source" in output
     assert "https://example.com/used" in output
@@ -64,7 +64,7 @@ def test_only_used_source_is_in_reference():
 
 def test_reference_has_web_section():
     """웹 Source는 웹 조회 자료 섹션에 들어가야 한다."""
-    output = reference.build(state=_state())
+    output, _ = reference.build(_state())
 
     assert "## REFERENCE" in output
     assert "### [C] 웹 조회 자료" in output
@@ -84,6 +84,6 @@ def test_duplicate_source_is_removed():
         }
     )
 
-    output = reference.build(state=state)
+    output, _ = reference.build(state)
 
     assert output.count("https://example.com/used") == 1
