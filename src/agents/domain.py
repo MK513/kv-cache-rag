@@ -179,7 +179,7 @@ def domain_assessment(state: Dict[str, Any]) -> Dict[str, Any]:
                 source_id=sid,
                 run_id=run_id,
                 collection=collection_name,
-                allowed_uses=["domain_assessment", "domain"],
+                allowed_uses=["domain"],
                 title=c.get("title", sid),
             )
 
@@ -188,7 +188,7 @@ def domain_assessment(state: Dict[str, Any]) -> Dict[str, Any]:
             source_id=sid,
             run_id=run_id,
             collection=collection_name,
-            allowed_uses=["domain_assessment", "domain"],
+            allowed_uses=["domain"],
             quote=c.get("text", "")[:300],
             location=f"p.{c.get('page', 1)}",
         )
@@ -214,10 +214,11 @@ def domain_assessment(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 6-4. Claim 구성: status=failed인 경우 규약에 따라 반드시 빈 리스트로 초기화
     claims: List[Claim] = []
+    gap_objects_extra: List[Gap] = []
     if status != "failed":
         # 1) 실증 분석 부문 (fact: 유효 인용 ID 바인딩)
-        if facts_text:
-            fact_citations = [cid for cid in HEX_CITATION_RE.findall(facts_text) if cid in cited_ids_set]
+        fact_citations = [cid for cid in HEX_CITATION_RE.findall(facts_text or "") if cid in cited_ids_set]
+        if facts_text and fact_citations:
             claims.append(
                 Claim(
                     claim_id=f"claim_domain_fact_{run_id[:8]}",
@@ -228,20 +229,33 @@ def domain_assessment(state: Dict[str, Any]) -> Dict[str, Any]:
                 )
             )
 
-        # 2) 결합 가설 부문 (hypothesis: 실측이 없는 추론이므로 evidence_ids는 비움)
-        if hypothesis_text:
+        # 2) 결합 가설 부문
+        # §6 — 추론과 가설에도 전제가 된 근거와 설명을 연결한다. 전제가 없으면
+        # Claim 이 아니라 Gap 이다(§5 — 결합 효과는 결합 실험이 없으면 가설로만 적는다).
+        hypothesis_premise = list(dict.fromkeys(valid_citations))
+        if hypothesis_text and hypothesis_premise:
             claims.append(
                 Claim(
                     claim_id=f"claim_domain_hypo_{run_id[:8]}",
                     text=hypothesis_text,
                     technology="both",
                     kind="hypothesis",
-                    evidence_ids=[],
+                    evidence_ids=hypothesis_premise,
+                    explanation="두 기술의 개별 근거에서 도출한 결합 가설이며 결합 실측 근거가 아니다.",
+                )
+            )
+        elif hypothesis_text:
+            gap_objects_extra.append(
+                Gap(
+                    role="domain",
+                    technology="both",
+                    item="결합 효과",
+                    reason="전제로 인용할 근거가 본문에 없다",
                 )
             )
 
     # 6-5. Gap 객체 생성
-    gap_objects = _extract_gaps_from_text(generated_text)
+    gap_objects = _extract_gaps_from_text(generated_text) + gap_objects_extra
 
     # 6-6. Assessment 최종 조립
     assessment = Assessment(

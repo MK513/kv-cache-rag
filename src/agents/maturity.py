@@ -20,11 +20,9 @@
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set, Tuple
-from langchain_core.language_models.chat_models import BaseChatModel
+from typing import Any, Dict, List, Set, Tuple
 
 from src.agents.common import run_node
-from src.llm import get_llm
 from src.schema import Assessment, Claim, Evidence, Gap, Source
 from src.tools.docs import bind_document_search, format_chunks
 
@@ -149,15 +147,13 @@ def _split_technology_sections(text: str) -> Tuple[str, str]:
 # ============================================================================
 # 2. LangGraph Maturity 노드 함수
 # ============================================================================
-def maturity(state: Dict[str, Any], llm: Optional[BaseChatModel] = None) -> Dict[str, Any]:
+def maturity(state: Dict[str, Any]) -> Dict[str, Any]:
     """papers_core에서 TRL 실증 근거를 수집하고 schema.Assessment를 구성하여 반환한다.
 
     State 14필드 규약:
       - 입력: run_id, run_config, domain (선택)
       - 반환: maturity (Assessment dict), trace (Event dict list)
     """
-    if llm is None:
-        llm = get_llm()
 
     run_id = state.get("run_id", "default_run")
     domain = state.get(
@@ -257,6 +253,7 @@ def maturity(state: Dict[str, Any], llm: Optional[BaseChatModel] = None) -> Dict
 
     # 6-3. Claim 구성: status=failed인 경우 규약에 따라 반드시 claims=[] 강제
     claims: List[Claim] = []
+    unbacked_gaps: List[Gap] = []
     if status != "failed":
         tq_text, itme_text = _split_technology_sections(generated_text)
 
@@ -265,24 +262,46 @@ def maturity(state: Dict[str, Any], llm: Optional[BaseChatModel] = None) -> Dict
             tq_cits = [cid for cid in HEX_CITATION_RE.findall(tq_text) if cid in cited_ids_set]
             itme_cits = [cid for cid in HEX_CITATION_RE.findall(itme_text) if cid in cited_ids_set]
 
-            claims.append(
-                Claim(
-                    claim_id=f"claim_maturity_tq_{run_id[:8]}",
-                    text=tq_text,
-                    technology="TurboQuant",
-                    kind="fact",
-                    evidence_ids=list(dict.fromkeys(tq_cits)),
+            # §6 — 근거가 없는 항목은 Claim 이 아니라 Gap 이다.
+            if tq_cits:
+                claims.append(
+                    Claim(
+                        claim_id=f"claim_maturity_tq_{run_id[:8]}",
+                        text=tq_text,
+                        technology="TurboQuant",
+                        kind="fact",
+                        evidence_ids=list(dict.fromkeys(tq_cits)),
+                    )
                 )
-            )
-            claims.append(
-                Claim(
-                    claim_id=f"claim_maturity_itme_{run_id[:8]}",
-                    text=itme_text,
-                    technology="ITME",
-                    kind="fact",
-                    evidence_ids=list(dict.fromkeys(itme_cits)),
+            else:
+                unbacked_gaps.append(
+                    Gap(
+                        role="maturity",
+                        technology="TurboQuant",
+                        item="TurboQuant 절 인용 근거 미확보",
+                        reason="본문 해당 절에 유효한 인용 ID 가 없다",
+                    )
                 )
-            )
+            # §6 — 근거가 없는 항목은 Claim 이 아니라 Gap 이다.
+            if itme_cits:
+                claims.append(
+                    Claim(
+                        claim_id=f"claim_maturity_itme_{run_id[:8]}",
+                        text=itme_text,
+                        technology="ITME",
+                        kind="fact",
+                        evidence_ids=list(dict.fromkeys(itme_cits)),
+                    )
+                )
+            else:
+                unbacked_gaps.append(
+                    Gap(
+                        role="maturity",
+                        technology="ITME",
+                        item="ITME 절 인용 근거 미확보",
+                        reason="본문 해당 절에 유효한 인용 ID 가 없다",
+                    )
+                )
         else:
             # 섹션 분리가 안 된 경우 fallback
             claims.append(
@@ -296,7 +315,7 @@ def maturity(state: Dict[str, Any], llm: Optional[BaseChatModel] = None) -> Dict
             )
 
     # 6-4. Gap 객체 구성
-    gap_objects = _extract_gaps_from_text(generated_text)
+    gap_objects = _extract_gaps_from_text(generated_text) + unbacked_gaps
 
     # 6-5. Assessment 최종 조립
     assessment = Assessment(

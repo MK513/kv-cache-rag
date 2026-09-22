@@ -18,7 +18,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-Technology = Literal["TurboQuant", "ITME"]
+# "both" 는 두 기술을 함께 다루는 Claim·Gap 용이다. 설계서 §3 의 검색 도구 계약이
+# 이미 쓰는 값이며, 종합 단계가 관점별로 갈리는 지점을 따로 정리한다(§5).
+Technology = Literal["TurboQuant", "ITME", "both"]
 Kind = Literal["fact", "inference", "hypothesis"]
 Status = Literal["completed", "partial", "failed"]
 Collection = Literal["papers_core", "ecosystem", "context", "web"]
