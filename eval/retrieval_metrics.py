@@ -1,84 +1,147 @@
 """검색 품질 실측 — 담당: R4 (설계서 §4)
 
-설계서 §4 의 "측정 예정(구현 단계)" 칸을 이 출력으로 채운다.
-언어별(ko/en) × 모드별(dense/rrf) 로 분리 보고하고, 같은 사실의 한/영 쌍이
-모두 회수된 비율을 '완전 회수율' 로 따로 낸다.
+설계서 §4의 "측정 예정(구현 단계)" 칸을 채우기 위한 벤치마크 평가 스크립트입니다.
+언어별(ko/en) × 모드별(dense/rrf)로 분리 측정하고, 같은 사실(fact)의 한/영 질의가
+모두 top_k 내에 회수된 비율인 '완전 회수율(Full Recovery Rate)'을 산출합니다.
 
+실행 방법:
     uv run python -m eval.retrieval_metrics
 """
 
 import json
-import sys
-from collections import defaultdict
 import os
 import sys
+from collections import defaultdict
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-# 실행 위치에 상관없이 동작하게 한다. 설정·매니페스트·출력 경로가 전부
-# 저장소 루트 기준 상대경로라, sys.path 추가와 함께 작업 디렉토리도 루트로 옮긴다.
+# ----------------------------------------------------------------------------
+# 저장소 루트 기준 경로 고정 (실행 위치 무관화)
+# ----------------------------------------------------------------------------
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 os.chdir(_ROOT)
 
-
 from src.rag.retrieve import search
 
 GOLDEN = Path("eval/goldenset.json")
+OUTPUT_JSON = Path("eval/retrieval_results.json")
 KS = (1, 3, 5)
-MIN_N = 12          # 셀당 표본이 이보다 적으면 경향만 본다는 경고를 낸다
+MIN_N = 12  # 서브셋당 표본 수가 이보다 적으면 경향성 경고 표시
 MODES = ("dense", "rrf")
 
 
-def rank_of(item: dict, mode: str) -> int | None:
-    hits = search(item["question"], collection="papers_core",
-                  technology=item["technology"], top_k=max(KS), mode=mode)
-    for i, h in enumerate(hits, 1):
-        if h["source"] == item["gold_source"] and h["page"] == item["gold_page"]:
-            return i
+def rank_of(item: Dict[str, Any], mode: str) -> Optional[int]:
+    """검색 결과에서 골든셋의 정답 청크(source, page)가 처음 등장한 순위(1-based)를 반환."""
+    hits = search(
+        item["question"],
+        collection="papers_core",
+        technology=item["technology"],
+        top_k=max(KS),
+        mode=mode,
+    )
+    
+    target_source = item.get("gold_source")
+    target_page = int(item.get("gold_page", -1))
+
+    for idx, chunk in enumerate(hits, start=1):
+        chunk_source = chunk.get("source")
+        chunk_page = int(chunk.get("page", -1))
+        
+        if chunk_source == target_source and chunk_page == target_page:
+            return idx
     return None
 
 
-def score(ranks: list[int | None]) -> dict:
+def calculate_metrics(ranks: List[Optional[int]]) -> Dict[str, float]:
+    """Hit@k 및 MRR@k 산출."""
     n = len(ranks) or 1
-    out = {}
+    metrics = {}
     for k in KS:
-        out[f"Hit@{k}"] = sum(r is not None and r <= k for r in ranks) / n
-        out[f"MRR@{k}"] = sum(1 / r for r in ranks if r is not None and r <= k) / n
-    return out
+        metrics[f"Hit@{k}"] = sum(r is not None and r <= k for r in ranks) / n
+        metrics[f"MRR@{k}"] = sum(1.0 / r for r in ranks if r is not None and r <= k) / n
+    return metrics
 
 
 def main():
     if not GOLDEN.exists():
-        sys.exit(f"{GOLDEN} 없음")
-    items = [i for i in json.loads(GOLDEN.read_text(encoding="utf-8"))["items"]
-             if not i["question"].startswith("TODO")]
-    if not items:
-        sys.exit(f"{GOLDEN} 의 items 가 아직 TODO 다. 원문에서 페이지를 확인해 먼저 채울 것.")
+        sys.exit(f"❌ 오류: {GOLDEN} 파일이 존재하지 않습니다.")
 
-    print(f"평가셋 {len(items)}문항 "
-          f"(ko {sum(i['lang']=='ko' for i in items)} / en {sum(i['lang']=='en' for i in items)}, "
-          f"TurboQuant {sum(i['technology']=='TurboQuant' for i in items)} / "
-          f"ITME {sum(i['technology']=='ITME' for i in items)})")
+    try:
+        data = json.loads(GOLDEN.read_text(encoding="utf-8"))
+        raw_items = data.get("items", [])
+    except Exception as e:
+        sys.exit(f"❌ 오류: {GOLDEN} 파싱 실패 - {e}")
+
+    items = [i for i in raw_items if not str(i.get("question", "")).startswith("TODO")]
+    if not items:
+        sys.exit(f"⚠️ {GOLDEN}의 items가 아직 TODO 상태입니다. 정답 페이지와 질의를 먼저 라벨링하십시오.")
+
+    print(
+        f"\n========================================================================\n"
+        f"📊 RAG 검색 품질 실측 시작 (총 {len(items)}문항)\n"
+        f" - 언어: ko {sum(i.get('lang')=='ko' for i in items)}개 / en {sum(i.get('lang')=='en' for i in items)}개\n"
+        f" - 기술: TurboQuant {sum(i.get('technology')=='TurboQuant' for i in items)}개 / "
+        f"ITME {sum(i.get('technology')=='ITME' for i in items)}개\n"
+        f"========================================================================"
+    )
+
+    report_data = {}
+    markdown_lines = []
+    markdown_lines.append("\n### [설계서 §4 기입용 실측 요약 표]")
+    markdown_lines.append("| Mode | Lang | Sample (n) | Hit@1 | Hit@3 | Hit@5 | MRR@3 | MRR@5 |")
+    markdown_lines.append("|---|---|---|---|---|---|---|---|")
 
     for mode in MODES:
-        ranks = {i["id"]: rank_of(i, mode) for i in items}
-        print(f"\n── mode={mode} ──")
+        print(f"\n▶ 검색 모드: [{mode.upper()}]")
+        ranks = {item["id"]: rank_of(item, mode) for item in items}
+        report_data[mode] = {"details": ranks, "metrics": {}}
 
+        # 언어별 메트릭 산출
         for lang in ("전체", "ko", "en"):
-            subset = [r for i, r in ((x, ranks[x["id"]]) for x in items)
-                      if lang == "전체" or i["lang"] == lang]
-            flag = "  ⚠ 표본 부족(경향만)" if len(subset) < MIN_N else ""
-            m = score(subset)
-            print(f"  {lang:4s} n={len(subset):3d}  "
-                  + "  ".join(f"{k}={v:.3f}" for k, v in m.items()) + flag)
+            subset_ranks = [
+                ranks[x["id"]]
+                for x in items
+                if lang == "전체" or x.get("lang") == lang
+            ]
+            m = calculate_metrics(subset_ranks)
+            report_data[mode]["metrics"][lang] = m
 
-        # 완전 회수율: 같은 fact 의 ko/en 문항이 모두 top_k 안에 들어온 비율
+            flag = " ⚠️ [표본 부족: 경향성만 참조]" if len(subset_ranks) < MIN_N else ""
+            metrics_str = "  ".join(f"{k}={v:.3f}" for k, v in m.items())
+            print(f"  - {lang:4s} (n={len(subset_ranks):2d}): {metrics_str}{flag}")
+
+            markdown_lines.append(
+                f"| {mode} | {lang} | {len(subset_ranks)} | "
+                f"{m['Hit@1']:.3f} | {m['Hit@3']:.3f} | {m['Hit@5']:.3f} | "
+                f"{m['MRR@3']:.3f} | {m['MRR@5']:.3f} |"
+            )
+
+        # 완전 회수율: 동일 fact_id의 ko 및 en 질의가 모두 top_k 안에 들어온 비율
         by_fact = defaultdict(list)
-        for i in items:
-            by_fact[i["fact_id"]].append(ranks[i["id"]])
+        for x in items:
+            fact_id = x.get("fact_id")
+            if fact_id:
+                by_fact[fact_id].append(ranks[x["id"]])
+
+        print(f"\n  [한/영 완전 회수율 (Full Recovery Rate) - 총 {len(by_fact)}개 Fact]")
+        report_data[mode]["full_recovery"] = {}
         for k in KS:
-            full = sum(all(r is not None and r <= k for r in rs) for rs in by_fact.values())
-            print(f"  완전 회수율@{k} = {full/len(by_fact):.3f}  (fact {len(by_fact)}건)")
+            full_recovered = sum(
+                len(rs) >= 2 and all(r is not None and r <= k for r in rs)
+                for rs in by_fact.values()
+            )
+            ratio = full_recovered / len(by_fact) if by_fact else 0.0
+            report_data[mode]["full_recovery"][f"FullRecovery@{k}"] = ratio
+            print(f"    - 완전 회수율@{k}: {ratio:.3f} ({full_recovered}/{len(by_fact)} facts)")
+
+    # 설계서 §4 복사 붙여넣기용 마크다운 표 출력
+    print("\n" + "\n".join(markdown_lines))
+
+    # 실행 결과 JSON 덤프
+    OUTPUT_JSON.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT_JSON.write_text(json.dumps(report_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n✅ 실측 상세 데이터가 '{OUTPUT_JSON}'에 저장되었습니다.\n")
 
 
 if __name__ == "__main__":
