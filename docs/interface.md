@@ -9,73 +9,84 @@
 
 | 계약 | 소유 | 소비 |
 |---|---|---|
-| ① State 14필드 + `src/schema.py` | R1 | 전원 |
+| ① State (§7 14행 / 17필드) + `src/schema.py` | R1 | 전원 |
 | ② ~~관점 dict `{text, citations, gaps}`~~ → `schema.Assessment` | R1 · R5 | R3 · R4 |
 | ③ chunk 스키마 + 검색 도구 시그니처 | R2 | R3 · R4 |
-| ④ `validation_errors` | R5 | R1 (라우팅) |
+| ④ `validation` · `review_status` | R5 | R1 (라우팅) |
 | ⑤ `sources.json` 의 `scope` · `perspectives` 값 | R2 (선별 R3) | R3 · R4 |
 
 ①②③만 정해지면 **R3~R5는 인덱스 완성 전에도 목업 청크로 개발을 시작할 수 있다** (§6).
 
 ---
 
-## ① State 14필드 + 공용 schema — `src/state.py` · `src/schema.py` (R1)
+## ① State + 공용 schema — `src/state.py` · `src/schema.py` (R1)
 
-> **2026-09-22 R1 변경 (브랜치 `feat/r1-graph-state-schema`).** 구버전 17키를 교체한다.
-> 아래 표가 현행이다. 구버전 표는 git 이력에 있다.
+> **2026-09-22 R1 (브랜치 `feat/r1-graph-state-schema`).** 구버전 17키를 교체한다.
+> 아래 표는 설계서 §7 표를 그대로 옮긴 것이다. §7 표는 **14행**이고 그중 세 행이
+> 묶음 표기(`run_id / run_config`, `validation / review_status`, `report / report_paths`)라
+> Python 필드로는 **17개**다. 묶음을 필드로 나누는 판단은 R1 소유다(R3 계약 문서).
 
-`TypedDict(total=False)`. **각 필드는 단독 쓰기 주체를 갖는다.** 병렬 fan-out에서 공통
-필드에 두 노드가 쓰면 LangGraph가 `InvalidUpdateError`를 낸다. 누적 reducer는 `trace` 하나뿐.
+`TypedDict(total=False)`. **병렬 구간에서는 각 평가 노드가 자기 결과 키만 쓴다.** 웹 자료는
+전역에 쌓지 않고 각 Assessment에 넣는다. 누적 reducer는 `trace` 하나뿐이다.
 
-| # | 필드 | 형식 | 단독 쓰기 주체 |
+| §7 행 | 필드 | 형식 | 쓰기 주체와 용도 |
 |---|---|---|---|
-| 1 | `run_id` | `str` | `app.py` (초기화) |
-| 2 | `run_config` | `dict` | `app.py` |
-| 3 | `sources_manifest` | `list[dict]` | `setup` |
-| 4 | `research` | `dict` (Assessment) | `research` |
-| 5 | `maturity` | `dict` (Assessment) | `maturity` |
-| 6 | `market` | `dict` (Assessment) | `market` |
-| 7 | `stakeholder` | `dict` (Assessment) | `stakeholder` |
-| 8 | `domain_assessment` | `dict` (Assessment) | `domain_assessment` |
-| 9 | `registry` | `dict` | **`collect_evidence` 만** |
-| 10 | `synthesis` | `dict` (Synthesis) | `synthesis` |
-| 11 | `review` | `dict` | **내용검토(R5) 만** |
-| 12 | `report` | `str` | `report` |
-| 13 | `run_status` | `str` | `final_check` · `app.py` |
+| 1 | `run_id` | `str` | 초기화. 실행 식별자 |
+| 1 | `run_config` | `dict` | 초기화(`app.py`) + `setup`이 자료 버전을 채운다 |
+| 2 | `research` | Assessment | `research` |
+| 3 | `maturity` | Assessment | `maturity` |
+| 4 | `market` | Assessment | `market` |
+| 5 | `stakeholder` | Assessment | `stakeholder` |
+| 6 | `domain_assessment` | Assessment | `domain_assessment` |
+| 7 | `source_registry` | `dict[str, Source]` | **`collect_evidence`만** |
+| 8 | `evidence_registry` | `dict[str, Evidence]` | **`collect_evidence`만** |
+| 9 | `gaps` | `list[Gap]` | `collect_evidence` 합류 후 수집 → `synthesis` 종합 후 순차 병합 |
+| 10 | `synthesis` | Synthesis | `synthesis` |
+| 11 | `validation` | `dict` | 검증 단계(`review`). 오류·내용 검토 결과 |
+| 11 | `review_status` | `str` | 검증 단계(`review`). `pending`이면 검토용 초안만 저장 |
+| 12 | `run_status` | `str` | 제어 단계(`final_check` · `app.py`) |
+| 13 | `report` | `str` | 출력 단계(`report`). Markdown 본문 |
+| 13 | `report_paths` | `list[str]` | 출력 단계(`publish`). Markdown·PDF 저장 경로 |
 | 14 | `trace` | `Annotated[list[dict], operator.add]` | 전 노드 (누적) |
 
 ```python
-run_config = {"domain": "데이터센터/클라우드", "runs_dir": "runs",
-              "web_top_k": 3, "web_context_chars": 40000,
-              "web": {"max_sources": 24, "max_searches": 16}}   # R3 계약의 한도 표
+run_config = {"domain": "데이터센터/클라우드", "technologies": ["TurboQuant", "ITME"],
+              "model": {...}, "limits": {...}, "runs_dir": "runs",
+              "web_top_k": 3, "web_context_chars": 40000, "web": {...},
+              "sources": [...]}      # setup 이 적재한 자료 버전(매니페스트)
 
-registry = {"sources": {source_id: Source}, "evidence": {evidence_id: Evidence},
-            "gaps": [Gap, ...]}
-
-review = {"errors": [...], "review_status": "pending|passed", "round": 1}
+validation = {"errors": [...], "reviewer": "...", "claim_verdicts": {...}}
+review_status = "pending" | "passed"
 ```
 
-**단일 쓰기 주체 원칙** — 네 평가 노드는 인덱스·웹을 각자 조회하지만 `registry`에 쓰지
-않는다. 자기 Assessment 안에만 Source·Evidence를 담고, 병합은 `collect_evidence`가 한다.
-동시 쓰기가 구조적으로 불가능해진다.
+**단일 쓰기 주체 원칙** — 병렬 노드는 공용 `gaps`나 레지스트리를 직접 수정하지 않는다.
+자기 Assessment 안에만 Source·Evidence·Gap을 담고, 병합은 `collect_evidence`가 한다.
+`gaps`만 순차 2단계(합류 → 종합)로 쓰며, 순서가 정해져 있어 reducer가 필요 없다.
 
-**재시도 횟수는 별도 필드가 아니다.** 근거 보완 횟수는 각 노드 내부, 재작성 횟수는
-`review["round"]`에 둔다. 14필드를 넘기지 않기 위한 선택이다.
+**재시도 횟수는 State 필드가 아니다.** 설계서 부록 A: *재시도는 노드 내부의 최대 1회
+처리다.* 근거 보완도 재작성도 노드 안에서 끝낸다.
 
 ### 공용 모델 — `src/schema.py`
 
 `Claim` / `Assessment` / `Source` / `Evidence` / `Gap` / `Synthesis` / `Conflict` / `Event`.
-필드는 R3 실물 출력(`src/tools/web_store.py`, `src/agents/stakeholder.py`)에서 역산했다.
+필드는 설계서 §6·§7과 R3 실물 출력(`src/tools/web_store.py`, `src/agents/stakeholder.py`)에서 맞췄다.
 
 - **검증은 dict 경계에서 한 번만.** `collect_evidence`가 `Assessment.model_validate`를
   부르고, 그 뒤로는 State를 dict로 흐른다. 노드마다 검증하지 않는다.
-- `Assessment`가 **인용 사슬**을 본다 — claim → evidence → source가 자기 안에서 닫히는지,
-  `status=failed`인데 claims가 남았는지. 병합이 믿을 근거는 이것뿐이다.
+- `Assessment` = `claims` / `sources` / `evidence` / `gaps` / `status`(§6). **인용 사슬**을
+  본다 — claim → evidence → source가 자기 안에서 닫히는지, `status=failed`인데 claims가
+  남았는지. 병합이 믿을 근거는 이것뿐이다.
 - `Source`·`Evidence`는 `extra="allow"`. 웹 출처(R3)와 색인 출처(R2)는 필드가 다르다.
   필수는 `source_id` · `run_id` · `collection` · `allowed_uses` 넷.
 - `Claim`·`Gap`·`Assessment`는 `extra="forbid"`. 오타난 필드가 조용히 통과하면 안 된다.
+- `Claim`의 `stakeholder_group`·`actor`·`context`는 **선택**이다. R3의 `ClaimDraft`는 이를
+  필수로 검사하지만, R4의 TRL·시장성 Claim에는 발언 주체가 없다. 이해관계자 Claim의
+  엄격한 검사는 R3의 draft 단계가 계속 맡는다.
 - `Gap.item`은 자유 문자열이다. 이해관계자는 `competitors` 같은 4값이지만 maturity는
   "TRL 6 실증 환경 근거" 식이라 Literal로 묶을 수 없다.
+- `Role` = `research` `maturity` `market` `stakeholder` `domain` `synthesis`. State 필드명은
+  `domain_assessment`지만 역할 이름은 R2의 `perspectives`와 맞춰 `domain`이다.
+  `synthesis`는 종합 단계가 남기는 Gap 때문에 있다(§7 *종합 후 순차 병합*).
 - **R5 조치:** `src/agents/synthesis.py`의 `Synthesis`·`Conflict` 정의를 지우고
   `src/schema.py`에서 import한다. 같은 정의를 두 벌 두지 않는다.
 
@@ -87,6 +98,7 @@ review = {"errors": [...], "review_status": "pending|passed", "round": 1}
 ```
 
 `node` 또는 `tool` 중 하나는 반드시 넣는다. 나머지 필드는 자유(`extra="allow"`).
+이벤트에 노드·시도 번호·시간을 넣는다(§7).
 
 ---
 
@@ -189,31 +201,41 @@ search_market_signals.invoke({
 
 ---
 
-## ④ `validation_errors` — `src/output/validate.py` (R5 → R1)
+## ④ `validation` · `review_status` — 내용 검토 (R5 → R1)
 
-R5가 쓰고 R1이 라우팅에 쓰는 **유일한 키**다.
+> **2026-09-22 R1.** 구버전 `validation_errors` · `validation_round` · `validate_eval` ·
+> `validate_final` · `abort`를 대체한다. 라우팅이 이 값을 보므로 형식은 R5·R1이 함께 정한다.
+
+R5가 쓰고 `final_check`가 읽는다. 설계서 §8: *형식 검사와 내용 검토*.
 
 ```python
-[{"node": "maturity", "kind": "없는 인용 ID", "ids": ["deadbeef0000"]},
- {"node": "market",   "kind": "인용 누락",     "ids": []},
- {"node": "synthesis","kind": "관점 상충 0건",  "ids": []}]
+validation = {
+  "errors": [{"node": "maturity", "claim_id": "claim-...", "kind": "없는 인용 ID"}],
+  "reviewer": "권예리",                       # claim_id별 판정과 검토자를 기록한다(§8)
+  "claim_verdicts": {"claim-...": "확인"},
+}
+review_status = "pending"   # 내용 검토가 끝나지 않았다 → 검토용 초안만 저장
 ```
 
-`kind` 는 위 3종만 쓴다. 늘릴 때는 R1과 함께 정한다 — 라우팅이 이 값을 본다.
+프로그램이 보는 것(§8) — Claim에 근거 ID가 연결됐는지, ID가 **이번 실행에서 확보한**
+자료인지, 노드별 허용 자료(컬렉션 및 웹 출처 범위)인지. 검증 실패 시 본문 위치를 찾을 수
+있도록 `claim_id`를 유지한다.
 
-검증 대상은 `CITED_NODES = ["research", "maturity", "market", "domain_assessment"]`.
-`stakeholder` 는 인용이 url이라 chunk_id 검증 대상이 아니다.
+사람이 보는 것(§8) — 원문 구절이 주장을 뒷받침하는지. 성능 수치의 단위·비교 기준선·실험
+조건, TRL 단계의 근거, 직접 채택과 인접 생태계 자료의 구분. **ID 대조만으로 자동
+통과시키지 않는다.**
 
-### 두 지점에서 검사한다
+### `final_check`가 판정하는 것 (부록 A)
 
-```
-fan-in 직후   validate_eval    stage="post_eval"        → 평가 4노드 재실행 (1회)
-synthesis 직후 validate_final   stage="post_synthesis"   → 종합 재작성 (1회)
-```
+| 조건 | run_status | 다음 |
+|---|---|---|
+| Assessment 중 `failed`, 또는 `validation.errors` 잔존 | `failed` | `fail` — 오류·로그 저장, 제출용 출력 차단 |
+| `review_status == "pending"` | `partial` | `save_draft` — 검토용 초안만 저장, 실행 정지 |
+| Assessment 중 `partial` | `partial` | `report` — 보고서는 낸다 |
+| 그 외 | `completed` | `report` → `publish` |
 
-앞쪽이 없으면 평가 노드가 만든 가짜 인용 ID가 보고서 §4 본문에 그대로 실린다 —
-종합 재작성만으로는 고쳐지지 않는다. 한도 초과 시 `abort` 노드가 실패를 남긴다
-(조용히 통과시키지 않는다).
+재시도는 노드 내부의 최대 1회 처리이므로 그래프에 되돌아오는 엣지는
+`save_draft → review`(검토 결과 반영 후 재개) 하나뿐이다.
 
 ---
 

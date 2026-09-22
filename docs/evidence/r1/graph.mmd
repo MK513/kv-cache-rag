@@ -15,9 +15,10 @@ graph TD;
 	synthesis(synthesis)
 	review(review)
 	final_check(final_check)
-	save_draft(save_draft)
+	save_draft(save_draft<hr/><small><em>__interrupt = after</em></small>)
 	fail(fail)
 	report(report)
+	publish(publish)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> setup;
 	collect_evidence --> synthesis;
@@ -27,17 +28,18 @@ graph TD;
 	final_check -.-> save_draft;
 	market --> collect_evidence;
 	maturity --> collect_evidence;
+	report --> publish;
 	research --> domain_assessment;
 	research --> market;
 	research --> maturity;
 	research --> stakeholder;
 	review --> final_check;
+	save_draft --> review;
 	setup --> research;
 	stakeholder --> collect_evidence;
 	synthesis --> review;
 	fail --> __end__;
-	report --> __end__;
-	save_draft --> __end__;
+	publish --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc

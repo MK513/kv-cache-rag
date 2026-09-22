@@ -27,7 +27,7 @@ os.chdir(_ROOT)
 
 from dotenv import load_dotenv
 
-from src.graph import MergeConflict, build_graph, resume_state, run_dir
+from src.graph import MergeConflict, build_graph, invoke, resume_state, run_dir
 from src.settings import settings
 from src.tools.web_store import save_json, utcnow
 
@@ -59,10 +59,6 @@ def finish(state, status, errors=()) -> str:
     with (directory / "trace.jsonl").open("a", encoding="utf-8") as f:   # 재개 시 이어 쓴다
         for row in state.get("trace", []):
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    if state.get("report"):
-        (directory / "report.md").write_text(state["report"], encoding="utf-8")
-        Path("output").mkdir(exist_ok=True)
-        Path("output/report.md").write_text(state["report"], encoding="utf-8")
     return status
 
 
@@ -77,18 +73,20 @@ def main():
     config = settings()["run"]
 
     if args.resume:
+        # 부록 A 의 `검토 결과 반영 후 재개` — 내용 검토부터 이어 간다. 평가·종합은 다시 돌리지 않는다.
         state = resume_state(args.resume, config["runs_dir"])
-        start = "final_check"      # 사람이 draft.json 의 review 를 고쳐 놓았다. 평가를 다시 돌리지 않는다.
+        start = "review"
     else:
         state = {"run_id": args.run_id or new_run_id(), "run_status": "running", "trace": [],
-                 "run_config": {"domain": args.domain, **config}}
+                 "run_config": {"domain": args.domain, "model": settings()["llm"],
+                                "limits": settings()["limits"], **config}}
         start = "setup"
 
     directory = start_run(state)
     print(f"[run] {state['run_id']} · {directory}")
 
     try:
-        final = build_graph(start=start).invoke(state)
+        final = invoke(build_graph(start=start), state)
     except MergeConflict as exc:
         # 근거가 서로 어긋났다. merge-errors.json 은 collect_evidence 가 이미 남겼다.
         print(f"실패: 근거 병합 오류 — {exc}")
@@ -99,9 +97,9 @@ def main():
 
     status = finish(final, final.get("run_status", "failed"))
     print({
-        "completed": f"완료: {directory/'report.md'}  (PDF: uv run python -m src.output.pdf)",
-        "partial": f"부분 완료 ({directory}) — 검토 대기면 draft.json 의 review 를 고치고 "
-                   f"`--resume {state['run_id']}`",
+        "completed": f"완료: {final.get('report_paths') or directory}",
+        "partial": f"부분 완료 ({directory}) — 검토 대기면 draft.json 의 validation·review_status 를 "
+                   f"고치고 `--resume {state['run_id']}`",
         "failed": f"실패: {directory/'run.json'} 확인",
     }[status])
     return status
