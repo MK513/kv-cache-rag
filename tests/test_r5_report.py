@@ -317,3 +317,27 @@ def test_premise_prefix_is_not_doubled(monkeypatch):
 
     assert "전제: 공식 코드가 없다는 점이다" in markdown
     assert "전제: 전제는" not in markdown
+
+
+def test_repeated_reference_numbers_collapse(monkeypatch):
+    """같은 출처의 다른 청크를 잇달아 인용해도 지면에는 번호가 한 번만 나온다."""
+    monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
+
+    state = _state()
+    state["maturity"]["claims"][0]["text"] = "ITME 는 로컬 기준선 대비 개선을 보고한다 [aaaaaaaaaaaa][bbbbbbbbbbbb]."
+    state["maturity"]["claims"][0]["evidence_ids"] = ["aaaaaaaaaaaa", "bbbbbbbbbbbb"]
+    state["maturity"]["evidence"] = [
+        {"evidence_id": "aaaaaaaaaaaa", "source_id": "s-maturity", "run_id": "r5-test",
+         "collection": "papers_core", "quote": "인용1", "location": "p.7",
+         "allowed_uses": ["maturity"]},
+        {"evidence_id": "bbbbbbbbbbbb", "source_id": "s-maturity", "run_id": "r5-test",
+         "collection": "papers_core", "quote": "인용2", "location": "p.9",
+         "allowed_uses": ["maturity"]},
+    ]
+    state["maturity"]["sources"][0]["collection"] = "papers_core"
+
+    markdown = report_module.report(state)["report"]
+
+    assert "개선을 보고한다 [1]." in markdown
+    assert "[1][1]" not in markdown
+    assert "인용 p.7, p.9" in markdown      # 두 위치는 REFERENCE 에 남는다

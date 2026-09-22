@@ -8,8 +8,8 @@ status=failed 시 claims=[] 가드레일이 지켜지는지 검사한다. papers
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
 
+from src.schema import Assessment
 from src.agents import domain as agent
 
 TQ_ID = "aaaaaaaaaaaa"
@@ -91,15 +91,12 @@ def test_no_citations_forces_failed_cleanly(monkeypatch):
     assert a["evidence"] == []
 
 
-def test_crashes_on_any_valid_citation_due_to_invalid_source_allowed_uses(monkeypatch):
-    """알려진 결함(가장 심각): 유효 인용이 하나라도 있으면 6-1 단계에서
-    Source(allowed_uses=["domain_assessment", "domain"]) 를 만드는데, 공용
-    schema.Role 에는 "domain_assessment" 가 없다(§7 R1 주석: State 필드명은
-    domain_assessment 지만 역할 이름은 domain). 그래서 인용 사슬을 검사하기도
-    전에 Source 생성에서 항상 pydantic.ValidationError 로 죽는다 — 이 버그 아래에
-    깔린 두 번째 결함(실증/결합 가설 Claim 이 항상 technology="both" 를 써서
-    schema.Technology 위반)은 이게 고쳐져야 비로소 드러난다. R4 가 고쳐야 할
-    실결함이며, 회귀 확인용으로 여기 고정해 둔다.
+def test_valid_citation_produces_a_linked_assessment(monkeypatch):
+    """유효 인용이 있으면 인용 사슬이 닫힌 Assessment 가 나온다.
+
+    Source 의 allowed_uses 는 "domain" 이다 — State 필드명은 domain_assessment 지만
+    schema.Role 의 역할 이름은 domain 이고 validate.py 도 그렇게 매핑한다.
+    (이전에는 allowed_uses 에 "domain_assessment" 를 넣어 Source 생성에서 죽었다.)
     """
     tq = chunk(TQ_ID, applies_to=["TurboQuant"])
     itme = chunk(ITME_ID, applies_to=["ITME"])
@@ -110,5 +107,9 @@ def test_crashes_on_any_valid_citation_due_to_invalid_source_allowed_uses(monkey
         f"2. ITME 단독 적용성\n세션을 늘린다 [{ITME_ID}].\n\n"
         "### [결합 가설]\n결합하면 시너지가 있을 것으로 추정된다.\n\n근거 공백: 없음"))
 
-    with pytest.raises(ValidationError):
-        agent.domain_assessment(STATE)
+    assessment = Assessment.model_validate(agent.domain_assessment(STATE)["domain_assessment"])
+
+    assert {s.source_id for s in assessment.sources}
+    assert all(s.allowed_uses == ["domain"] for s in assessment.sources)
+    hypothesis = [c for c in assessment.claims if c.kind == "hypothesis"]
+    assert hypothesis and hypothesis[0].evidence_ids and hypothesis[0].explanation
