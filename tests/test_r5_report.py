@@ -178,3 +178,42 @@ def test_carried_verdicts_are_disclosed(monkeypatch):
     assert "내용 검토 이월: 주장 1건" in limits
     assert "20260922-122252-d94611" in limits
     assert "이번 실행에서 다시 검토하지 않았다" in limits
+
+
+def test_summary_stays_within_the_half_page_budget(monkeypatch):
+    """§9 — SUMMARY 는 PDF 반 페이지 이내다. 전부 나열하면 제출본이 생성되지 않는다."""
+    from src.output.pdf import check_summary
+
+    monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
+
+    state = _state()
+    state["synthesis"] |= {
+        "agreements": [f"공통 사실 {i}" for i in range(7)],
+        "conflicts": [{"perspective": p, "why": f"{p} 근거 범위가 다르다"}
+                      for p in ("TRL", "시장성", "이해관계자", "도메인")],
+        "gaps": [f"근거 공백 {i}" for i in range(41)],
+    }
+    markdown = report_module.report(state)["report"]
+
+    passed, message = check_summary(markdown)
+    assert passed, message
+    assert "외 38건은 §6 참고" in markdown      # 나머지는 절을 가리킨다
+    assert "외 4건은 §5.1 참고" in markdown
+
+
+def test_gap_line_does_not_repeat_the_technology(monkeypatch):
+    monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
+
+    state = _state()
+    state["gaps"] = [
+        {"role": "research", "technology": "TurboQuant",
+         "item": "TurboQuant의 E2E 처리량", "reason": "제공된 근거에서 확인하지 못함"},
+        {"role": "stakeholder", "technology": "ITME",
+         "item": "investors", "reason": "원문 본문 근거 미확보"},
+    ]
+    limits = report_module.report(state)["report"]
+    limits = limits[limits.index("## 6. 한계"):]
+
+    assert "TurboQuant TurboQuant의" not in limits
+    assert "- TurboQuant의 E2E 처리량: 제공된 근거에서 확인하지 못함" in limits
+    assert "- ITME investors: 원문 본문 근거 미확보" in limits      # 접두어가 필요한 쪽

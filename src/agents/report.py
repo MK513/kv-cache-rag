@@ -86,8 +86,13 @@ def _carried(state: dict) -> str:
 
 def _gap_lines(state: dict) -> list[str]:
     """§6 한계에 실을 근거 공백. 검토 부결 항목도 여기로 옮긴다(§8)."""
-    lines = [f"{gap.get('technology', '')} {gap.get('item', '')}: {gap.get('reason', '')}".strip()
-             for gap in (state.get("gaps") or [])]
+    lines = []
+    for gap in state.get("gaps") or []:
+        item, technology = gap.get("item", ""), gap.get("technology", "")
+        # item 이 이미 기술명을 담고 있으면 접두어를 붙이지 않는다.
+        # LLM 이 쓴 문장이라 담을 때도 있고 아닐 때도 있다.
+        head = item if technology and technology in item else f"{technology} {item}".strip()
+        lines.append(f"{head}: {gap.get('reason', '')}".strip(": ").strip())
 
     validation = state.get("validation") or {}
     verdicts = validation.get("claim_verdicts") or {}
@@ -99,8 +104,22 @@ def _gap_lines(state: dict) -> list[str]:
     return lines
 
 
+SUMMARY_TOP = 3     # §9 — SUMMARY 는 PDF 반 페이지 이내다. 전체 목록은 §5·§6 에 있다.
+
+
+def _top(items, section) -> str:
+    """앞의 몇 건만 싣고 나머지는 해당 절을 가리킨다."""
+    shown = _bullets(items[:SUMMARY_TOP])
+    rest = len(items) - SUMMARY_TOP
+    return shown + (f"\n- 외 {rest}건은 {section} 참고" if rest > 0 else "")
+
+
 def _summary(synthesis: dict) -> str:
-    """LLM 없이 synthesis의 확정 결과만 사용해 SUMMARY를 생성한다."""
+    """LLM 없이 synthesis 의 확정 결과만 사용해 SUMMARY 를 만든다.
+
+    §9 목차표 — SUMMARY 는 *평가 결과, 관점별 주요 차이, **중요한** 공백* 을 반 페이지
+    이내로 담는다. 전부 나열하면 분량 점검에 걸려 제출본이 생성되지 않는다.
+    """
     parts = []
 
     agreements = synthesis.get("agreements") or []
@@ -108,27 +127,18 @@ def _summary(synthesis: dict) -> str:
     gaps = synthesis.get("gaps") or []
 
     if agreements:
-        parts.append(
-            "네 관점에서 공통적으로 확인된 사항은 다음과 같다.\n"
-            + _bullets(agreements)
-        )
+        parts.append("네 관점에서 공통적으로 확인된 사항은 다음과 같다.\n"
+                     + _top(agreements, "§5.1"))
 
     if conflicts:
-        conflict_lines = [
-            f"**{conflict['perspective']}** — {conflict['why']}"
-            for conflict in conflicts
-        ]
-
-        parts.append(
-            "관점별 평가가 실제로 달라진 지점은 다음과 같다.\n"
-            + _bullets(conflict_lines)
-        )
+        conflict_lines = [f"**{conflict['perspective']}** — {conflict['why']}"
+                          for conflict in conflicts]
+        parts.append("관점별 평가가 실제로 달라진 지점은 다음과 같다.\n"
+                     + _top(conflict_lines, "§5.2"))
 
     if gaps:
-        parts.append(
-            "평가 과정에서 확인된 주요 근거 공백은 다음과 같다.\n"
-            + _bullets(gaps)
-        )
+        parts.append("평가 과정에서 확인된 주요 근거 공백은 다음과 같다.\n"
+                     + _top(gaps, "§6"))
 
     if not parts:
         return "확정된 종합 평가 결과가 없다."

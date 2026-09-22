@@ -88,7 +88,7 @@ def _extract_gaps_from_text(text: str) -> List[Gap]:
                 role="research",
                 technology=tech_matched,
                 item=item,
-                reason="논문 본문 추출 미확인 영역",
+                reason="제공된 근거에서 확인하지 못함",
             )
         )
     return gap_objects
