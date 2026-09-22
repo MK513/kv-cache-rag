@@ -150,3 +150,37 @@ def test_llm_cache_counts_hits_and_misses(tmp_path, monkeypatch):
 
     assert (cache.hits, cache.misses) == (1, 1)
     assert llm.llm_report() | {"cache_hits": 1, "cache_misses": 1} == llm.llm_report()
+
+
+def test_run_records_token_usage_and_call_counts():
+    """§6 — 실제 비용은 토큰 사용량과 실행 기록으로 확인한다."""
+    from types import SimpleNamespace
+
+    import app
+
+    state = {"trace": [
+        {"node": "research", "status": "ok", "attempt": 1},
+        {"node": "stakeholder", "action": "draft_validation", "status": "failed", "attempt": 1},
+        {"node": "stakeholder", "action": "draft_validation", "status": "ok", "attempt": 2},
+        {"tool": "search_market_signals", "node": "stakeholder", "attempt": 1},
+        {"node": "synthesis", "status": "ok", "attempt": 1},
+        {"node": "report", "status": "ok", "attempt": 1},
+    ]}
+    usage = SimpleNamespace(successful_requests=6, prompt_tokens=41000,
+                            completion_tokens=7120, total_tokens=48120, total_cost=0.3141)
+
+    record = app._accounting(state, usage)
+
+    assert record["node_events"] == {"research": 1, "stakeholder": 2, "synthesis": 1}
+    assert record["tool_calls"] == 1          # tool 이 붙은 이벤트만 센다
+    assert record["retries"] == 1             # attempt > 1
+    assert record["llm_calls"] == 6 and record["total_tokens"] == 48120
+    assert record["cost_usd"] == 0.3141
+    assert "report" not in record["node_events"]   # 생성 단계가 아니다
+
+
+def test_accounting_without_a_callback_still_records_the_trace():
+    import app
+
+    record = app._accounting({"trace": [{"node": "market", "attempt": 1}]}, None)
+    assert record["node_events"] == {"market": 1} and "llm_calls" not in record

@@ -16,6 +16,7 @@ import json
 import os
 import secrets
 import sys
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -26,6 +27,7 @@ os.chdir(_ROOT)
 
 
 from dotenv import load_dotenv
+from langchain_community.callbacks import get_openai_callback
 
 from src.graph import MergeConflict, build_graph, invoke, resume_state, run_dir
 from src.llm import enable_cache, llm_report
@@ -48,7 +50,37 @@ def start_run(state) -> Path:
     return directory
 
 
-def finish(state, status, errors=()) -> str:
+GENERATION_NODES = ("research", "maturity", "market", "stakeholder",
+                    "domain_assessment", "synthesis")
+
+
+def _accounting(state, usage) -> dict:
+    """설계서 §6 — 토큰 사용량과 호출 집계. 실제 비용은 이 기록으로 확인한다.
+
+    `llm_calls`·토큰은 콜백이 센 실제 API 호출이라 정확하다. 캐시로 재사용한 응답은
+    호출이 없으므로 0 으로 잡히고, 그게 실제 비용이다.
+    나머지는 trace 에서 센 값이다 — 콜백은 어느 노드가 불렀는지 모른다.
+    """
+    events = state.get("trace") or []
+    node_events = Counter(e.get("node") for e in events
+                          if e.get("node") and not e.get("tool"))
+    record = {
+        "node_events": {n: node_events[n] for n in GENERATION_NODES if node_events[n]},
+        "tool_calls": sum(1 for e in events if e.get("tool")),
+        "retries": sum(1 for e in events if (e.get("attempt") or 1) > 1),
+    }
+    if usage is not None:
+        record |= {
+            "llm_calls": usage.successful_requests,
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+            "total_tokens": usage.total_tokens,
+            "cost_usd": round(usage.total_cost, 4),
+        }
+    return record
+
+
+def finish(state, status, errors=(), usage=None) -> str:
     """실행 결과를 runs/<run_id>/ 에 남긴다. 실패해도 남긴다 — 그게 증빙이다."""
     directory = run_dir(state)
     started = directory / "run.json"
@@ -56,7 +88,7 @@ def finish(state, status, errors=()) -> str:
         "run_id": state["run_id"], "run_config": state.get("run_config", {}),
         "run_status": status, "ended_at": utcnow(), "errors": list(errors),
         # run_config.model 은 설정값이고 이쪽이 실제로 적용된 값이다(§6).
-        "llm": llm_report(),
+        "llm": llm_report() | _accounting(state, usage),
     })
     save_json(directory / "state.json", {k: v for k, v in state.items() if k != "trace"})
     with (directory / "trace.jsonl").open("a", encoding="utf-8") as f:   # 재개 시 이어 쓴다
@@ -92,17 +124,18 @@ def main():
     directory = start_run(state)
     print(f"[run] {state['run_id']} · {directory}")
 
-    try:
-        final = invoke(build_graph(start=start), state)
-    except MergeConflict as exc:
-        # 근거가 서로 어긋났다. merge-errors.json 은 collect_evidence 가 이미 남겼다.
-        print(f"실패: 근거 병합 오류 — {exc}")
-        return finish(state, "failed", [str(exc)])
-    except Exception as exc:
-        finish(state, "failed", [repr(exc)])
-        raise                       # 스택 트레이스를 삼키지 않는다
+    with get_openai_callback() as usage:
+        try:
+            final = invoke(build_graph(start=start), state)
+        except MergeConflict as exc:
+            # 근거가 서로 어긋났다. merge-errors.json 은 collect_evidence 가 이미 남겼다.
+            print(f"실패: 근거 병합 오류 — {exc}")
+            return finish(state, "failed", [str(exc)], usage=usage)
+        except Exception as exc:
+            finish(state, "failed", [repr(exc)], usage=usage)
+            raise                   # 스택 트레이스를 삼키지 않는다
 
-    status = finish(final, final.get("run_status", "failed"))
+    status = finish(final, final.get("run_status", "failed"), usage=usage)
     pending = (final.get("validation") or {}).get("pending_claims") or []
 
     carried = (final.get("validation") or {}).get("carried_claims") or []
