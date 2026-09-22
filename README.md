@@ -242,7 +242,7 @@ uv sync --extra pdf && uv run python -m src.output.pdf
 > `src/settings.py`는 v13 파일 목록에 없는 추가분(R1). R2·R4가 `top_k`·청킹 상수를
 > R1의 `llm.py`를 거쳐 가져오는 역참조를 피하려고 분리했다.
 
-### 시작 전 고정할 인터페이스
+### 시작 전 고정할 인터페이스 → [docs/interface.md](docs/interface.md)
 
 1. `src/state.py` 17키의 형식 — **R1**
 2. chunk 스키마와 `search_source_documents(collection 필수)` 시그니처, `sources.json` 의 `scope`·`perspectives` 값 목록 — **R2**

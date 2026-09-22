@@ -9,6 +9,17 @@ LLM 을 호출하지 않으므로 API 키 없이 돌아간다.
  src 를 찾지 못한다. -m 은 현재 디렉토리를 경로에 넣는다.)
 """
 
+import os
+import sys
+from pathlib import Path
+
+# 실행 위치에 상관없이 동작하게 한다. 설정·매니페스트·출력 경로가 전부
+# 저장소 루트 기준 상대경로라, sys.path 추가와 함께 작업 디렉토리도 루트로 옮긴다.
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_ROOT))
+os.chdir(_ROOT)
+
+
 from src.rag.index import build
 from src.rag.query_kw import translated
 from src.tools.docs import search_source_documents
