@@ -231,8 +231,14 @@ def _structured_errors(
     return errors
 
 
-def check(state, stage: str) -> dict:
-    """현재 State의 자동 검증 결과를 반환한다."""
+def check(state) -> dict:
+    """현재 State의 자동 검증 결과를 State 필드 `validation` 으로 반환한다.
+
+    설계서 §8 *형식 검사* — Claim에 근거 ID가 연결됐는지, ID가 이번 실행에서 확보한
+    자료인지, 노드별 허용 자료인지 확인한다. 내용 검토(사람)는 `review.py` 가 맡는다.
+
+    재시도 횟수는 세지 않는다. 부록 A: *재시도는 노드 내부의 최대 1회 처리다.*
+    """
     valid_chunk_ids = set(_build_index()["chunks"])
     current_run_id = state.get("run_id")
 
@@ -275,13 +281,13 @@ def check(state, stage: str) -> dict:
     # conflicts == [] 는 정상일 수 있으므로 오류로 처리하지 않는다.
 
     return {
-        "validation_errors": errors,
-        "validation_round": (
-            state.get("validation_round", 0)
-            + (1 if stage == "post_synthesis" else 0)
-        ),
+        "validation": {
+            "errors": errors,
+            "checked_nodes": node_names,
+        },
         "trace": [{
-            "node": f"validate:{stage}",
+            "node": "validate",
+            "status": "failed" if errors else "ok",
             "errors": len(errors),
         }],
     }
