@@ -142,7 +142,8 @@ search_source_documents.invoke({
   기술 서술이 회수돼 시장 주장의 근거 자리에 놓인다.
 - `perspective` 를 주면 `sources.json` 의 `perspectives` 로 문서를 거른다.
   비교군 논문이 기술 조사의 1차 근거로 올라오는 것을 막는다.
-- 필터가 랭킹 **뒤**에 걸리므로, 필터가 있으면 내부 검색 풀을 4배로 키운다.
+- 필터가 랭킹 **뒤**에 걸리므로, top_k로 자르기 전에 컬렉션 전체 인덱스(`k=n`)를 검색해
+필터 통과분이 top_k 미만으로 줄어들지 않게 한다.
 
 ### `summarize_evidence` (R2)
 
