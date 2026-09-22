@@ -5,28 +5,38 @@ LangGraph Multi-Agent + Agentic RAG 기반 평가 보고서 자동 생성
 
 **판교 8반** · 권수진 · 권예리 · 김민 · 박인기 · 정승원
 
-## 구현 현황 (2026-09-22 갱신)
+## R1 구현 브랜치 안내 (2026-09-22)
 
-R1(State/Graph)·R2(코퍼스·색인·검색평가)·R3(검색계층·웹근거·이해관계자)·R4(평가 에이전트)가
-각자 브랜치를 main에 merge했다. R5(종합·보고서·출력)는 초기 스캐폴드(`src/output/*`)만
-있고 담당자 구현 여부는 아직 확인되지 않았다 — 실행 전 담당자에게 확인할 것.
+브랜치 `feat/r1-graph-state-schema`. 최신 설계서의 **공용 스키마·State·그래프·실행 제어**를
+구현한다. R3(검색·웹 근거·이해관계자)는 main에 들어와 있다.
 
-- 검색은 **dense 코사인만** 사용한다. RRF/BM25는 제거됐다(`src/rag/retrieve.py`).
-- 변경 계약: [docs/interface.md](docs/interface.md#r3-최신-설계서-적용-계약-2026-09-22)
-- R3 인수·검증 결과: [docs/r3-handoff.md](docs/r3-handoff.md)
-- 합성 데이터 실행 증빙: [docs/evidence/r3/checks.json](docs/evidence/r3/checks.json)
-- `eval/goldenset.json`·`eval/retrieval_metrics.py`는 R2가 20문항을 채우고 R4가 실측
-  스크립트를 재작성했다 — 두 브랜치가 같은 파일을 건드려 병합 시 충돌이 났었다.
+**아래 3절 이후 본문은 이전 설계 기록이다.** R2/R4/R5가 새 계약으로 이행하면 각자 고친다.
+특히 구버전의 `validate_eval`/`validate_final`/`abort`, 관점 dict `{text, citations, gaps}`,
+`evidence` 단일 쓰기 주체, RRF 설정은 더 이상 현행이 아니다.
+State와 그래프는 설계서 §7 표와 부록 A 그래프 소스를 그대로 옮겼다.
+
+| 바뀐 것 | 어디 |
+|---|---|
+| 공용 모델 Claim/Assessment/Source/Evidence/Gap/Synthesis/Event | [`src/schema.py`](src/schema.py) |
+| State — 설계서 §7 표 그대로(14행 / 17필드), 필드별 쓰기 주체 | [`src/state.py`](src/state.py) · [interface.md ①](docs/interface.md) |
+| 그래프 — 부록 A 소스 그대로, 조건부 엣지는 `final_check` 하나 | [`src/graph.py`](src/graph.py) |
+| 내용 검토 계약 `validation`·`review_status` | [interface.md ④](docs/interface.md) |
+| run_id·`runs/<run_id>/`·run_status·검토 후 재개 | [`app.py`](app.py) |
+
+- R1 인수·검증 결과: [docs/r1-handoff.md](docs/r1-handoff.md)
+- 4경로 실행 증빙: [docs/evidence/r1/runs/checks.json](docs/evidence/r1/runs/checks.json)
+- R3 계약과 인수 기록: [interface.md](docs/interface.md#r3-최신-설계서-적용-계약-2026-09-22) · [r3-handoff.md](docs/r3-handoff.md)
 
 ```bash
-uv sync
-uv run python scripts/prepare_sources.py --verify
-uv run python -m scripts.ingest
-uv run python -m eval.retrieval_metrics
+uv sync --extra test
+uv run pytest -q
+uv run python -m scripts.r1_smoke --root /tmp/kv-r1-run    # 그래프 4경로 (mock)
+uv run python -m scripts.r3_smoke --root /tmp/kv-r3-run    # 검색·웹 (합성 fixture)
 ```
 
-위 네 명령이 전부 통과하면 코퍼스·색인·검색 경로는 정상이다. `app.py` 전체 파이프라인
-실행은 R5의 종합·보고서 노드 완성 여부에 달려 있다.
+**`uv run python app.py`는 아직 끝까지 돌지 않는다.** R4/R5가 `schema.Assessment` 계약으로
+이행하기 전이라 `research` 노드에서 멈추고 실패를 기록한다. 숨기지 않는다.
+smoke가 남기는 보고서·주장은 합성 데이터이며 실제 기술 평가가 아니다.
 
 ---
 
@@ -44,28 +54,42 @@ HW 진영은 **공간을 넓게** 접근한다. 이 시스템은 두 기술을 T
 
 ```mermaid
 flowchart TD
-  S([START]) --> R[research · papers_core]
-  R --> C{양 기술 근거 확보?}
-  C -->|아니오 · 최대 1회| R
-  C -->|예 또는 평가 보류| T[maturity · papers_core]
-  C --> M[market · ecosystem]
-  C --> K[stakeholder · 웹]
-  C --> P[domain · papers_core+context]
-  T --> V1[validate_eval]
-  M --> V1
-  K --> V1
-  P --> V1
-  V1 -->|인용 오류 · 1회| T
-  V1 -->|통과| Y[synthesis]
-  Y --> V2[validate_final]
-  V2 -->|인용 오류 · 1회| Y
-  V2 -->|한도 초과| X[abort]
-  V2 -->|통과| G[report]
-  G --> E([END])
+  A[설정 확인과 논문 적재 · setup] --> B[기술 조사와 근거 점검 · research]
+  B --> T[TRL 평가 RAG · maturity]
+  B --> M[시장성 평가 RAG · market]
+  B --> S[이해관계자 평가 웹 · stakeholder]
+  B --> D[도메인 평가 RAG · domain_assessment]
+  T --> C[collect_evidence 네 결과 합류]
+  M --> C
+  S --> C
+  D --> C
+  C --> F[종합 작성과 주장 검증 · synthesis]
+  F --> R[출처 대조와 내용 검토 · review]
+  R --> V{final_check}
+  V -->|검토 대기| W[검토용 초안 저장 · save_draft]
+  W -->|검토 결과 반영 후 재개| R
+  V -->|미해결 오류| X[failed 오류와 로그 저장 · fail]
+  V -->|통과| G[Markdown과 PDF 생성 · report]
+  G --> Z[레이아웃 확인 후 제출본 저장 · publish]
 ```
 
-**validate를 두 지점에 건다.** 앞쪽(`validate_eval`)이 없으면 평가 노드가 만든
-가짜 인용 ID가 §4 본문에 그대로 실린다 — synthesis 재작성만으로는 고쳐지지 않는다.
+설계서 부록 A의 그래프 소스를 그대로 옮긴 것이다. `docs/evidence/r1/graph.mmd`가
+실제 컴파일된 그래프다.
+
+**재시도는 노드 내부의 최대 1회 처리다**(부록 A). 그래서 조건부 엣지는 `final_check`
+하나뿐이고, 되돌아오는 엣지는 `save_draft → review`(검토 결과 반영 후 재개) 하나뿐이다.
+`final_check`는 인용 오류와 사람의 내용 검토 완료 여부를 함께 확인한다.
+
+**검토 대기는 초안만 저장하고 멈춘다.** 사람의 검토 결과가 있어야 `review`로 돌아갈 수
+있으므로 `save_draft` 뒤에서 실행이 정지한다. 사람이 `draft.json`의 `validation`·
+`review_status`를 고치고 `app.py --resume <run_id>`로 내용 검토부터 이어 간다.
+
+**병합 오류는 분기가 아니라 예외다.** 같은 ID에 다른 내용이 들어오면 어느 원문을
+가리키는지 고를 근거가 없다(§7). `merge-errors.json`을 남기고 실행을 끝낸다 —
+어긋난 근거로 종합·검토에 LLM을 태우지 않는다.
+
+**`collect_evidence`는 다섯 Assessment를 병합한다.** 기술 조사 근거도 레지스트리에 있어야
+참고문헌을 실제 인용에서 역으로 만들 수 있다(§8·§9).
 
 ### 에이전트 7종
 

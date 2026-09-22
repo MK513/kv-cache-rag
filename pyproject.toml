@@ -32,3 +32,8 @@ pdf = ["markdown>=3.6", "weasyprint>=62"]
 
 [tool.uv]
 package = false
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

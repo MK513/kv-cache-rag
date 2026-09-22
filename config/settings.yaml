@@ -7,10 +7,25 @@ llm:
   temperature: 0
 
 retrieval:
-  top_k: 5
-  rrf_k: 60                   # RRF 상수. score = Σ 1/(rrf_k + rank)
-  dense_weight: 0.5
-  sparse_weight: 0.5
+  top_k: 5                    # dense 코사인 전용. RRF 상수는 R3 검색에서 읽지 않아 제거했다.
+
+# 실행 단위 설정 — app.py 가 run_config 로 묶어 State 에 넣는다 (R1)
+run:
+  runs_dir: runs              # runs/<run_id>/ 아래에 원문 스냅샷·결과·trace 를 남긴다
+  technologies:               # 설계서 §2 — 설정에 고정 등록해 모든 결과물에서 같은 비교 대상을 쓴다
+    - TurboQuant
+    - ITME
+  web_top_k: 3                # 기술×주체별 웹 검색 후보 수
+  web_context_chars: 40000    # 모델에 전달할 근거 XML 총 문자 수
+  web:                        # 이해관계자 웹 수집 한도 (R3 계약)
+    max_sources: 24           # 성공한 원문 수
+    max_fetches: 40           # 본문 수집 시도 수. 실패도 집계
+    max_searches: 16          # 2기술×4주체 최초 8회 + 보완 최대 8회
+    max_body_chars: 50000     # 원문 한 건의 추출 본문 길이
+    max_total_chars: 300000   # 실행 전체 본문 문자 수
+    max_response_bytes: 2000000
+    min_body_chars: 120       # 빈 문서·짧은 오류 페이지 차단
+    timeout: 15               # HTTP 연결/read timeout(초)
 
 limits:
   max_pages: 200              # 색인 대상 전체(3 컬렉션) 합계 상한
