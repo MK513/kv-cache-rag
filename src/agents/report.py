@@ -26,6 +26,10 @@ KIND_LABEL = {"fact": "사실", "inference": "추론", "hypothesis": "가설"}
 TECH_LABEL = {"both": "두 기술"}      # 내부 enum 값을 그대로 지면에 내보내지 않는다
 ROLE_LABEL = {"research": "기술 조사", "maturity": "TRL", "market": "시장성",
               "stakeholder": "이해관계자", "domain": "도메인 적용", "synthesis": "종합"}
+# item 이 이미 대상 기술을 말하고 있으면 접두어를 붙이지 않는다. LLM 이 쓴 문장이라
+# "양 기술" · "두 기술" · 기술명 나열 등 표현이 갈린다.
+TECH_ALIAS = {"both": ("두 기술", "양 기술", "TurboQuant", "ITME"),
+              "TurboQuant": ("TurboQuant",), "ITME": ("ITME",)}
 CITATION_RE = re.compile(r"\[([0-9a-f]{12})\]")
 
 
@@ -130,9 +134,8 @@ def _gaps_section(state: dict) -> str:
     grouped: dict[str, list[str]] = {}
     for gap in state.get("gaps") or []:
         item, technology = gap.get("item", ""), gap.get("technology", "")
-        # item 이 이미 기술명을 담고 있으면 접두어를 붙이지 않는다.
-        head = item if technology and technology in item else \
-            f"{TECH_LABEL.get(technology, technology)} {item}".strip()
+        named = any(alias in item for alias in TECH_ALIAS.get(technology, (technology,)) if alias)
+        head = item if named else f"{TECH_LABEL.get(technology, technology)} {item}".strip()
         line = f"{head}: {gap.get('reason', '')}".strip(": ").strip()
         grouped.setdefault(gap.get("role", ""), []).append(line)
 

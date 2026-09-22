@@ -286,3 +286,21 @@ def test_both_is_written_in_korean(monkeypatch):
     markdown = report_module.report(state)["report"]
 
     assert "**[사실 · 두 기술]**" in markdown and "· both]" not in markdown
+
+
+def test_both_prefix_is_skipped_when_the_item_already_says_it(monkeypatch):
+    """LLM 이 "양 기술의 ..." 라고 쓰면 "두 기술 양 기술의 ..." 가 되면 안 된다."""
+    monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
+
+    state = _state()
+    state["gaps"] = [
+        {"role": "research", "technology": "both", "item": "양 기술의 하드웨어 스펙 비교",
+         "reason": "제공된 근거에서 확인하지 못함"},
+        {"role": "market", "technology": "both", "item": "시장 규모·성장률",
+         "reason": "ecosystem 색인 내 근거 미확인"},
+    ]
+    limits = report_module.report(state)["report"]
+
+    assert "- 양 기술의 하드웨어 스펙 비교:" in limits
+    assert "두 기술 양 기술의" not in limits
+    assert "- 두 기술 시장 규모·성장률:" in limits      # 기술을 안 말한 항목엔 붙인다
