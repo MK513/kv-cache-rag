@@ -40,8 +40,10 @@ def _number_citations(markdown: str, marks: dict) -> str:
     필요하지만 독자는 어느 출처인지 알 수 없다. REFERENCE 에도 그 ID 가 없다.
     번호를 못 찾으면 원래 ID 를 남긴다. 조용히 지우면 인용이 사라진 것처럼 보인다.
     """
-    return CITATION_RE.sub(
+    numbered = CITATION_RE.sub(
         lambda m: f"[{marks[m.group(1)]}]" if m.group(1) in marks else m.group(0), markdown)
+    # 같은 출처의 서로 다른 청크를 잇달아 인용하면 [1][1] 이 된다. 지면에는 한 번이면 된다.
+    return re.sub(r"(?:\[(\d+)\])(?:\[\1\])+", r"[\1]", numbered)
 
 
 def _held(state: dict) -> str:
