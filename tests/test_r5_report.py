@@ -146,8 +146,8 @@ def test_gaps_and_survey_date_are_in_the_limits_section(monkeypatch):
     assert "### 5.3 결합 가설" in markdown        # 5 절에는 공백 소절이 없다
 
 
-def test_claim_kind_is_visible(monkeypatch):
-    """§6 — 사실 주장과 추론을 구분해 적는다."""
+def test_only_inference_and_hypothesis_are_marked(monkeypatch):
+    """§6 — 사실과 추론을 구분한다. 사실이 기본이라 모든 문단에 라벨을 붙이지 않는다."""
     monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
 
     state = _state()
@@ -158,10 +158,9 @@ def test_claim_kind_is_visible(monkeypatch):
     })
     markdown = report_module.report(state)["report"]
 
-    assert "**[사실 · ITME]**" in markdown
-    assert "**[가설 · 두 기술]**" in markdown
-    assert "> 전제: 개별 근거에서 도출한 추론이다" in markdown
-
+    assert "[사실" not in markdown and "[추론" not in markdown and "[가설" not in markdown
+    assert "TRL 평가 본문" in markdown                     # 사실 주장은 본문만
+    assert "> **가설** — 실측 결과가 아니다. 전제: 개별 근거에서 도출한 추론이다" in markdown
 
 def test_carried_verdicts_are_disclosed(monkeypatch):
     """§10 — 검토 범위를 명시적으로 기록한다. 이월은 이번 실행에서 다시 본 것이 아니다."""
@@ -275,17 +274,18 @@ def test_overview_section_has_no_verdict_labels(monkeypatch):
     perspectives = markdown[markdown.index("## 4. 관점별 평가"):markdown.index("## 5. 시사점")]
 
     assert "**[사실" not in overview and "기술 조사 본문" in overview
-    assert "**[사실 · ITME]**" in perspectives      # §4 에는 남는다
+    assert "TRL 평가 본문" in perspectives
 
 
 def test_both_is_written_in_korean(monkeypatch):
     monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
 
     state = _state()
-    state["maturity"]["claims"][0]["technology"] = "both"
+    state["gaps"] = [{"role": "market", "technology": "both", "item": "시장 규모",
+                      "reason": "미확인"}]
     markdown = report_module.report(state)["report"]
 
-    assert "**[사실 · 두 기술]**" in markdown and "· both]" not in markdown
+    assert "두 기술 시장 규모" in markdown and "both" not in markdown
 
 
 def test_both_prefix_is_skipped_when_the_item_already_says_it(monkeypatch):
@@ -304,3 +304,16 @@ def test_both_prefix_is_skipped_when_the_item_already_says_it(monkeypatch):
     assert "- 양 기술의 하드웨어 스펙 비교:" in limits
     assert "두 기술 양 기술의" not in limits
     assert "- 두 기술 시장 규모·성장률:" in limits      # 기술을 안 말한 항목엔 붙인다
+
+
+def test_premise_prefix_is_not_doubled(monkeypatch):
+    """모델이 "전제는 ..." 으로 시작해도 "전제: 전제는" 이 되지 않는다."""
+    monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
+
+    state = _state()
+    state["market"]["claims"][0] |= {"kind": "inference",
+                                     "explanation": "전제는 공식 코드가 없다는 점이다"}
+    markdown = report_module.report(state)["report"]
+
+    assert "전제: 공식 코드가 없다는 점이다" in markdown
+    assert "전제: 전제는" not in markdown

@@ -71,13 +71,12 @@ def _approved(state: dict) -> dict:
     return approved
 
 
-def _claims(assessment: dict, *, labels: bool = True) -> str:
+def _claims(assessment: dict) -> str:
     """Claim 을 본문으로 편다.
 
-    `labels=True` 는 §4 관점별 평가용이다 — §6 이 *공개 자료에서 확인한 사실과 그 사실에서
-    추론한 내용을 구분한다* 고 해서 종류와 대상 기술을 함께 적는다.
-    §3 기술 개요는 §9 목차표가 *각 기술의 접근 방식과 적용 조건* 이라고 한 서술 절이라
-    판정 표시를 붙이지 않는다.
+    §6 — *공개 자료에서 확인한 사실과 그 사실에서 추론한 내용을 구분한다.* 사실이 기본이라
+    따로 표시하지 않고, 추론·가설만 전제와 함께 표시한다. 모든 문단에 "[사실]" 을 붙이면
+    구분이 아니라 소음이 된다.
     """
     claims = assessment.get("claims") or []
     if not claims:
@@ -86,15 +85,19 @@ def _claims(assessment: dict, *, labels: bool = True) -> str:
     blocks = []
     for claim in claims:
         body = (claim.get("text") or "").strip()
-        if labels:
-            kind = KIND_LABEL.get(claim.get("kind", ""), claim.get("kind", ""))
-            technology = claim.get("technology", "")
-            body = f"**[{kind} · {TECH_LABEL.get(technology, technology)}]**\n{body}"
-        if claim.get("explanation"):
-            body += f"\n> 전제: {claim['explanation'].strip()}"
+        kind = claim.get("kind", "")
+        if kind != "fact":
+            note = KIND_LABEL.get(kind, kind)
+            explanation = (claim.get("explanation") or "").strip()
+            # 모델이 "전제는 ..." 으로 시작하는 경우가 잦다. "전제: 전제는" 이 되지 않게 한다.
+            for prefix in ("전제는 ", "전제: ", "전제 "):
+                if explanation.startswith(prefix):
+                    explanation = explanation[len(prefix):].lstrip()
+                    break
+            body += f"\n\n> **{note}** — 실측 결과가 아니다."
+            body += f" 전제: {explanation}" if explanation else ""
         blocks.append(body)
     return "\n\n".join(blocks)
-
 
 def _carried(state: dict) -> str:
     """이월된 검토 판정을 밝힌다(§10 — 조사 수행 시점과 정보의 검토 범위를 명시적으로 기록).
@@ -259,7 +262,7 @@ ITME를 대상으로, TRL·시장성·이해관계자·도메인 네 관점에�
 
 ## 3. 기술 개요
 
-{_claims(approved["research"], labels=False)}
+{_claims(approved["research"])}
 
 ## 4. 관점별 평가
 
