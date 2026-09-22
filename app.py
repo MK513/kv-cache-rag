@@ -28,6 +28,7 @@ os.chdir(_ROOT)
 from dotenv import load_dotenv
 
 from src.graph import MergeConflict, build_graph, invoke, resume_state, run_dir
+from src.llm import enable_cache, llm_report
 from src.settings import settings
 from src.tools.web_store import save_json, utcnow
 
@@ -54,6 +55,8 @@ def finish(state, status, errors=()) -> str:
     save_json(started, json.loads(started.read_text(encoding="utf-8")) | {
         "run_id": state["run_id"], "run_config": state.get("run_config", {}),
         "run_status": status, "ended_at": utcnow(), "errors": list(errors),
+        # run_config.model 은 설정값이고 이쪽이 실제로 적용된 값이다(§6).
+        "llm": llm_report(),
     })
     save_json(directory / "state.json", {k: v for k, v in state.items() if k != "trace"})
     with (directory / "trace.jsonl").open("a", encoding="utf-8") as f:   # 재개 시 이어 쓴다
@@ -72,6 +75,7 @@ def main():
     args = p.parse_args()
 
     load_dotenv(override=True)
+    enable_cache()          # 같은 프롬프트면 같은 응답 — 재현성을 모델에 기대지 않는다
     config = settings()["run"]
 
     if args.resume:

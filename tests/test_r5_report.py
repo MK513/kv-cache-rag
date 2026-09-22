@@ -217,3 +217,15 @@ def test_gap_line_does_not_repeat_the_technology(monkeypatch):
     assert "TurboQuant TurboQuant의" not in limits
     assert "- TurboQuant의 E2E 처리량: 제공된 근거에서 확인하지 못함" in limits
     assert "- ITME investors: 원문 본문 근거 미확보" in limits      # 접두어가 필요한 쪽
+
+
+def test_cached_model_responses_are_disclosed(monkeypatch):
+    """§6 — 실제 비용은 실행 기록으로 확인한다. 캐시 적중은 새로 판단하지 않았다는 뜻이다."""
+    monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
+    monkeypatch.setattr(report_module, "llm_report",
+                        lambda: {"cache_hits": 5, "cache_misses": 1})
+
+    limits = report_module.report(_state())["report"]
+    limits = limits[limits.index("## 6. 한계"):]
+
+    assert "모델 응답 재사용: 5건" in limits and "새로 생성 1건" in limits

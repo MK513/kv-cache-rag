@@ -133,3 +133,20 @@ def test_corpus_hash_mismatch_stops_the_run(tmp_path):
 
     original.unlink()
     assert "원문이 없다" in verify_corpus({"sources": [entry]})[0]
+
+
+def test_llm_cache_counts_hits_and_misses(tmp_path, monkeypatch):
+    """재현성은 모델이 아니라 캐시가 담당한다. 적중 수를 세지 못하면 비용 기록이 거짓이 된다."""
+    from langchain_core.outputs import Generation
+
+    from src import llm
+
+    monkeypatch.setattr(llm, "_cache", None)
+    cache = llm.enable_cache(str(tmp_path / "llm.sqlite"))
+
+    assert cache.lookup("같은 프롬프트", "모델") is None        # miss
+    cache.update("같은 프롬프트", "모델", [Generation(text="응답")])
+    assert cache.lookup("같은 프롬프트", "모델")[0].text == "응답"   # hit
+
+    assert (cache.hits, cache.misses) == (1, 1)
+    assert llm.llm_report() | {"cache_hits": 1, "cache_misses": 1} == llm.llm_report()

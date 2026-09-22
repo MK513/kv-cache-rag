@@ -10,7 +10,7 @@
 - 최종 REFERENCE는 reference.py가 실제 사용 근거를 기준으로 생성한다.
 """
 
-from src.llm import model_name
+from src.llm import llm_report, model_name
 from src.output import reference
 
 
@@ -82,6 +82,19 @@ def _carried(state: dict) -> str:
     return (f"- 내용 검토 이월: 주장 {len(carried)}건은 이전 실행"
             f"{'(' + ', '.join(runs) + ')' if runs else ''}의 판정을 그대로 사용했다. "
             f"주장 문장과 인용 근거가 완전히 같은 경우에만 옮겼으며, 이번 실행에서 다시 검토하지 않았다.")
+
+
+def _reused() -> str:
+    """캐시로 재사용한 모델 응답을 밝힌다(§6 — 실제 비용은 실행 기록으로 확인한다).
+
+    적중은 이번 실행에서 모델이 새로 판단하지 않았다는 뜻이다. 조사 시점 해석에 영향을 준다.
+    """
+    report = llm_report()
+    hits = report.get("cache_hits") or 0
+    if not hits:
+        return ""
+    return (f"\n- 모델 응답 재사용: {hits}건은 이전 실행과 프롬프트가 같아 캐시된 응답을 "
+            f"그대로 사용했다(이번 실행에서 새로 생성 {report.get('cache_misses', 0)}건).")
 
 
 def _gap_lines(state: dict) -> list[str]:
@@ -248,7 +261,7 @@ ITME를 대상으로, TRL·시장성·이해관계자·도메인 네 관점에�
 - 조사 수행 시점: {config.get('started_at', '미상')}
 - 근거 범위: 지정 Doc Pool 색인(papers_core·ecosystem·context)과 이번 실행에서 본문을
   확보한 웹 자료로 한정한다. 후보로만 조회한 자료는 근거로 쓰지 않는다.
-{_carried(state)}
+{_carried(state)}{_reused()}
 **분석의 한계**
 
 - 본 평가는 공개된 논문·백서·사례 자료를 기반으로 하며 자체 실측 벤치마크가 아니다.
