@@ -105,4 +105,17 @@ def test_missing_pdf_dependency_does_not_kill_the_graph(state, monkeypatch, tmp_
     assert update["report_paths"] == [str(tmp_path / "r5-test" / "report.md")]
     assert update["trace"][0]["status"] == "partial"
     result = json.loads((tmp_path / "r5-test" / "submission.json").read_text())
-    assert result["reason"] == "PDF 의존성 미설치"
+    assert result["reason"] == "RuntimeError: PDF 의존성 미설치"
+
+
+def test_system_library_failure_does_not_kill_the_graph(state, monkeypatch, tmp_path):
+    """weasyprint 가 깔려 있어도 libpango 가 없으면 OSError 가 난다. 실행을 버리지 않는다."""
+    def boom(markdown_path, pdf_path):
+        raise OSError("cannot load library 'libpango-1.0-0'")
+
+    monkeypatch.setattr(node, "render_pdf", boom)
+    update = node.publish(state)
+
+    assert update["report_paths"] == [str(tmp_path / "r5-test" / "report.md")]
+    assert update["trace"][0]["status"] == "partial"
+    assert "libpango" in json.loads((tmp_path / "r5-test" / "submission.json").read_text())["reason"]

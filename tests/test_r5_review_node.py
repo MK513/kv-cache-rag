@@ -118,16 +118,17 @@ def test_review_reader_groups_rows_by_claim(state, tmp_path, capsys):
     assert show("r5-test", runs_dir=tmp_path, only_pending=True, width=80) == 0
 
 
-def test_verdict_carries_only_when_claim_and_evidence_are_identical(tmp_path):
+def test_verdict_carries_from_the_ledger(tmp_path):
     """§8 — 사람이 읽은 것이 그대로일 때만 판정을 옮긴다."""
-    previous = {"run_id": "run-a", "run_config": {"runs_dir": str(tmp_path)},
-                "market": assessment("market")}
-    node.review(previous)
+    first = {"run_id": "run-a", "run_config": {"runs_dir": str(tmp_path)},
+             "market": assessment("market")}
+    node.review(first)
     fill(tmp_path / "run-a" / "review.csv", "확인")
+    node.review(first)                      # 채운 판정이 원장으로 올라간다
 
-    same = {"run_id": "run-b", "market": assessment("market"),
-            "run_config": {"runs_dir": str(tmp_path), "carry_review_from": "run-a"}}
-    update = node.review(same)
+    later = {"run_id": "run-b", "run_config": {"runs_dir": str(tmp_path)},
+             "market": assessment("market")}
+    update = node.review(later)
 
     assert update["review_status"] == "passed"
     assert update["validation"]["carried_claims"] == ["claim-market"]
@@ -135,15 +136,42 @@ def test_verdict_carries_only_when_claim_and_evidence_are_identical(tmp_path):
 
 
 def test_changed_claim_text_is_reviewed_again(tmp_path):
-    previous = {"run_id": "run-a", "run_config": {"runs_dir": str(tmp_path)},
-                "market": assessment("market")}
-    node.review(previous)
+    first = {"run_id": "run-a", "run_config": {"runs_dir": str(tmp_path)},
+             "market": assessment("market")}
+    node.review(first)
     fill(tmp_path / "run-a" / "review.csv", "확인")
+    node.review(first)
 
     changed = assessment("market")
     changed["claims"][0]["text"] = "market 주장 (문장이 바뀌었다)"
     update = node.review({"run_id": "run-c", "market": changed,
-                          "run_config": {"runs_dir": str(tmp_path), "carry_review_from": "run-a"}})
+                          "run_config": {"runs_dir": str(tmp_path)}})
 
     assert update["review_status"] == "pending"
     assert update["validation"]["carried_claims"] == []
+
+
+def test_no_carry_review_forces_a_fresh_review(tmp_path):
+    first = {"run_id": "run-a", "run_config": {"runs_dir": str(tmp_path)},
+             "market": assessment("market")}
+    node.review(first)
+    fill(tmp_path / "run-a" / "review.csv", "확인")
+    node.review(first)
+
+    update = node.review({"run_id": "run-d", "market": assessment("market"),
+                          "run_config": {"runs_dir": str(tmp_path), "no_carry_review": True}})
+
+    assert update["review_status"] == "pending"
+
+
+def test_ledger_records_what_was_judged(tmp_path):
+    """지문만 남기면 나중에 무엇을 보고 판정했는지 확인할 수 없다."""
+    state = {"run_id": "run-a", "run_config": {"runs_dir": str(tmp_path)},
+             "market": assessment("market")}
+    node.review(state)
+    fill(tmp_path / "run-a" / "review.csv", "확인")
+    node.review(state)
+
+    entry = next(iter(node.load_ledger(node.LEDGER).values()))
+    assert entry["claim_text"] == "market 주장" and entry["reviewer"] == "권예리"
+    assert entry["node"] == "market" and entry["evidence_ids"] == ["e-market"]

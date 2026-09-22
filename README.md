@@ -321,6 +321,19 @@ uv run python -m scripts.ingest
 uv run python app.py
 ```
 
+첫 실행은 **검토 대기**로 멈춘다(설계서 §8 — ID 대조만으로 자동 통과시키지 않는다).
+`runs/<run_id>/review.csv` 의 `review_result`(확인|부결)·`reviewer` 를 채우고 재개한다.
+
+```bash
+uv run python -m scripts.review_reader <run_id> --pending   # 주장과 근거를 나란히 읽기
+uv run python app.py --resume <run_id>
+```
+
+판정은 `reviews/verdicts.json` 에 쌓인다. 다음 실행에서 **주장 문장과 인용 근거가 완전히
+같은 Claim** 은 이 원장의 판정을 자동으로 물려받으므로 다시 검토하지 않는다. 한 글자라도
+다르면 사람이 읽은 것이 아니므로 미판정으로 남는다. 전부 새로 검토하려면
+`--no-carry-review` 를 준다.
+
 **PDF** (그래프와 분리 — 폰트 문제로 파이프라인이 죽지 않게):
 
 ```bash

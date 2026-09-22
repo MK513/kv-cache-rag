@@ -362,10 +362,12 @@ def publish(state) -> dict:
             final_path=final_path,
             validation_errors=errors,
         )
-    except RuntimeError as exc:
+    except Exception as exc:
+        # 선택 의존성이다. weasyprint 가 깔려 있어도 libpango 같은 시스템 라이브러리가
+        # 없으면 OSError 가 난다. PDF 하나 때문에 실행 전체를 버리지 않는다.
         result = {
             "generated": False,
-            "reason": str(exc),
+            "reason": f"{type(exc).__name__}: {exc}".strip()[:300],
             "validation_errors": [],
             "checks": quality_checks(state.get("report", "")),
             "path": None,

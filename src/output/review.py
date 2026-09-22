@@ -19,6 +19,8 @@ review_result와 reviewer는 사람이 직접 입력한다.
 
 import csv
 import hashlib
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from src.output import validate
@@ -172,46 +174,87 @@ def claim_fingerprint(rows: list[dict]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
-def carry_verdicts(rows: list[dict], previous_csv: Path, previous_run: str) -> list[str]:
-    """이전 실행의 판정을 **주장과 근거가 완전히 같은** Claim 에만 옮긴다(설계서 §8).
+LEDGER = Path("reviews/verdicts.json")
+
+
+def load_ledger(path: str | Path = LEDGER) -> dict:
+    """검토 판정 원장. 실행 저장소가 아니라 저장소 루트에 둔다.
+
+    runs/ 는 .gitignore 대상이고 실행마다 새로 생긴다. 사람이 들인 검토 시간은 실행보다
+    오래 살아야 하므로 팀이 공유·커밋하는 파일로 뺐다(§8 — claim_id별 판정과 검토자를
+    기록한다).
+    """
+    path = Path(path)
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8")).get("verdicts", {})
+
+
+def save_ledger(verdicts: dict, path: str | Path = LEDGER) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"verdicts": verdicts}, ensure_ascii=False, indent=2,
+                               sort_keys=True), encoding="utf-8")
+    return path
+
+
+def carry_verdicts(rows: list[dict], ledger: dict) -> list[str]:
+    """원장의 판정을 **주장과 근거가 완전히 같은** Claim 에만 옮긴다(설계서 §8).
 
     문장이 한 글자라도 바뀌었으면 사람이 읽은 것이 아니므로 옮기지 않는다. 코퍼스가
     같아도 매 실행 LLM 이 주장을 다시 쓰고, 웹 근거는 매번 새로 수집된다.
     """
-    previous_csv = Path(previous_csv)
-    if not previous_csv.exists():
-        return []
-
-    judged = {}
-    for group in group_by_claim(
-            list(csv.DictReader(previous_csv.open(encoding="utf-8-sig")))).values():
-        verdict = next((r for r in group if (r.get("review_result") or "").strip()), None)
-        if verdict:
-            judged[claim_fingerprint(group)] = verdict
-
     carried = []
     for claim_id, group in group_by_claim(rows).items():
-        source = judged.get(claim_fingerprint(group))
-        if not source:
+        entry = ledger.get(claim_fingerprint(group))
+        if not entry:
             continue
         group[0].update(
-            review_result=source["review_result"],
-            reviewer=source.get("reviewer", ""),
-            review_comment=source.get("review_comment", ""),
-            carried_from=source.get("carried_from") or previous_run,
+            review_result=entry["review_result"],
+            reviewer=entry.get("reviewer", ""),
+            review_comment=entry.get("review_comment", ""),
+            carried_from=entry.get("run_id", ""),
         )
         carried.append(claim_id)
     return carried
 
 
-def write_review_csv(state: dict, output_path: str | Path, *, carry_from: Path | None = None,
-                     carry_run: str = "") -> tuple[Path, list[str]]:
-    """Human review용 CSV 파일을 생성한다. carry_from 이 있으면 같은 Claim 의 판정을 옮긴다."""
+def promote(rows: list[dict], ledger: dict, run_id: str) -> list[str]:
+    """이번 실행에서 새로 채운 판정을 원장에 올린다. 지문이 키라 덮어써도 같은 내용이다."""
+    added = []
+    for claim_id, group in group_by_claim(rows).items():
+        judged = next((r for r in group if (r.get("review_result") or "").strip()), None)
+        if not judged:
+            continue
+        key = claim_fingerprint(group)
+        if key in ledger:
+            continue
+        ledger[key] = {
+            "review_result": judged["review_result"],
+            "reviewer": judged.get("reviewer", ""),
+            "review_comment": judged.get("review_comment", ""),
+            "run_id": judged.get("carried_from") or run_id,
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+            # 무엇을 보고 판정했는지 남긴다. 지문만으로는 나중에 확인할 수 없다.
+            "claim_id": claim_id,
+            "node": judged.get("node", ""),
+            "technology": judged.get("technology", ""),
+            "claim_kind": judged.get("claim_kind", ""),
+            "claim_text": judged.get("claim_text", ""),
+            "evidence_ids": sorted(r["evidence_id"] for r in group if r.get("evidence_id")),
+        }
+        added.append(claim_id)
+    return added
+
+
+def write_review_csv(state: dict, output_path: str | Path, *,
+                     ledger: dict | None = None) -> tuple[Path, list[str]]:
+    """Human review용 CSV 를 만든다. 원장에 같은 Claim 이 있으면 판정을 채워 둔다."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     rows = build_review_rows(state)
-    carried = carry_verdicts(rows, carry_from, carry_run) if carry_from else []
+    carried = carry_verdicts(rows, ledger) if ledger else []
 
     fieldnames = [
         "claim_id",
@@ -295,18 +338,23 @@ def review(state) -> dict:
     validation = dict(checked["validation"])
 
     config = state.get("run_config") or {}
+    ledger_path = Path(config.get("review_ledger") or LEDGER)
+    ledger = {} if config.get("no_carry_review") else load_ledger(ledger_path)
+
     path = run_dir(state) / "review.csv"
     carried = []
     if not path.exists():
         # ponytail: 초안이 재작성되면 worksheet 가 낡는다. 판정을 지우지 않으려고
         #           덮어쓰지 않는다. 재작성이 잦아지면 claim_id 기준 병합으로 바꾼다.
-        previous = config.get("carry_review_from")
-        _, carried = write_review_csv(
-            state, path,
-            carry_from=Path(config.get("runs_dir", "runs")) / previous / "review.csv" if previous else None,
-            carry_run=previous or "")
+        _, carried = write_review_csv(state, path, ledger=ledger)
 
+    rows = list(csv.DictReader(path.open(encoding="utf-8-sig")))
     verdicts = read_verdicts(path)
+
+    # 사람이 이번에 채운 판정을 원장에 올린다. 다음 실행이 같은 주장을 다시 묻지 않는다.
+    added = promote(rows, ledger, state.get("run_id", ""))
+    if added:
+        save_ledger(ledger, ledger_path)
     claim_ids = _claim_ids(state)
     pending = sorted(claim_ids - set(verdicts))
     rejected = sorted(cid for cid, v in verdicts.items() if v["verdict"] == "부결")
@@ -321,6 +369,7 @@ def review(state) -> dict:
         "reviewers": sorted({v["reviewer"] for v in verdicts.values() if v["reviewer"]}),
         # 이월된 판정은 사람이 이번 실행에서 다시 본 것이 아니다. 어디서 왔는지 남긴다(§8).
         "carried_claims": sorted({cid for cid, v in verdicts.items() if v["carried_from"]}) or carried,
+        "review_ledger": str(ledger_path),
     }
     if unclear:
         validation["errors"] = list(validation.get("errors") or []) + [
@@ -339,6 +388,8 @@ def review(state) -> dict:
             "claims": len(claim_ids),
             "pending": len(pending),
             "rejected": len(rejected),
+            "carried": len(carried),
+            "promoted": len(added),
             "errors": len(validation.get("errors") or []),
         }],
     }
