@@ -19,21 +19,68 @@ def _bullets(items) -> str:
     return "\n".join(f"- {item}" for item in items) if items else "- 해당 없음"
 
 
-def _status(tech_status: dict) -> str:
-    """근거 미확보로 평가 보류된 기술이 있으면 경고 문구를 만든다."""
-    if not tech_status or all(v == "ok" for v in tech_status.values()):
+PERSPECTIVE_NODES = ["research", "maturity", "market", "stakeholder", "domain_assessment"]
+KIND_LABEL = {"fact": "사실", "inference": "추론", "hypothesis": "가설"}
+
+
+def _held(state: dict) -> str:
+    """평가 보류를 남긴 관점이 있으면 머리말에 경고를 단다(§5 — 자료가 없는 항목은 평가 보류)."""
+    held = [node for node in PERSPECTIVE_NODES
+            if (state.get(node) or {}).get("status") in {"partial", "failed"}]
+    if not held:
         return ""
+    return ("\n> ⚠️ 근거를 확보하지 못해 **평가 보류** 항목을 남긴 관점: "
+            f"{', '.join(held)}\n")
 
-    held = [
-        tech
-        for tech, status in tech_status.items()
-        if status != "ok"
-    ]
 
-    return (
-        "\n> ⚠️ 원문 근거를 확보하지 못해 "
-        f"**평가 보류**로 남긴 기술: {', '.join(held)}\n"
-    )
+def _approved(state: dict) -> dict:
+    """내용 검토에서 부결된 Claim 을 뺀 Assessment 를 만든다.
+
+    §8 — 근거를 확보하지 못한 주장은 평가 보류 항목으로 옮기고 사실 서술에서 제외한다.
+    원본 State 를 고치지 않는다. Assessment 의 단독 쓰기 주체는 각 평가 노드다.
+    """
+    rejected = set((state.get("validation") or {}).get("rejected_claims") or [])
+    approved = {}
+    for node in PERSPECTIVE_NODES:
+        assessment = dict(state.get(node) or {})
+        if assessment.get("claims"):
+            assessment["claims"] = [claim for claim in assessment["claims"]
+                                    if claim.get("claim_id") not in rejected]
+        approved[node] = assessment
+    return approved
+
+
+def _claims(assessment: dict) -> str:
+    """Claim 을 종류·대상 기술과 함께 본문으로 편다(§6 — 사실과 추론을 구분한다)."""
+    claims = assessment.get("claims") or []
+    if not claims:
+        return "- 승인된 주장 없음. 근거 공백은 §6 을 참고한다."
+
+    blocks = []
+    for claim in claims:
+        kind = KIND_LABEL.get(claim.get("kind", ""), claim.get("kind", ""))
+        head = f"**[{kind} · {claim.get('technology', '')}]**"
+        body = (claim.get("text") or "").strip()
+        block = f"{head}\n{body}"
+        if claim.get("explanation"):
+            block += f"\n> 전제: {claim['explanation'].strip()}"
+        blocks.append(block)
+    return "\n\n".join(blocks)
+
+
+def _gap_lines(state: dict) -> list[str]:
+    """§6 한계에 실을 근거 공백. 검토 부결 항목도 여기로 옮긴다(§8)."""
+    lines = [f"{gap.get('technology', '')} {gap.get('item', '')}: {gap.get('reason', '')}".strip()
+             for gap in (state.get("gaps") or [])]
+
+    validation = state.get("validation") or {}
+    verdicts = validation.get("claim_verdicts") or {}
+    for claim_id in validation.get("rejected_claims") or []:
+        verdict = verdicts.get(claim_id) or {}
+        reviewer = verdict.get("reviewer") or "검토자 미상"
+        comment = verdict.get("comment") or "사유 미기재"
+        lines.append(f"검토 부결: {claim_id} (검토자: {reviewer} — {comment})")
+    return lines
 
 
 def _summary(synthesis: dict) -> str:
@@ -85,20 +132,21 @@ def _conflicts(conflicts: list[dict]) -> str:
 
 
 def report(state) -> dict:
-    """검증된 State를 최종 Markdown 보고서로 조립한다."""
+    """검증된 State 를 §9 목차에 맞춰 Markdown 으로 조립한다. 판단 LLM 을 부르지 않는다(§6)."""
     synthesis = state["synthesis"]
+    config = state.get("run_config") or {}
+    domain = config.get("domain", "데이터센터/클라우드")
+    approved = _approved(state)
 
     summary = _summary(synthesis)
-    conflicts = _conflicts(
-        synthesis.get("conflicts") or []
-    )
+    conflicts = _conflicts(synthesis.get("conflicts") or [])
 
     md = f"""# KV cache 최적화 기술 다관점 평가
 
-**대상 기술** TurboQuant (SW 압축) · ITME (HW 메모리 확장)  
-**적용 도메인** {state['domain']}  
+**대상 기술** TurboQuant (SW 압축) · ITME (HW 메모리 확장)
+**적용 도메인** {domain}
 **생성 모델** {model_name()}
-{_status(state.get('tech_status', {}))}
+{_held(state)}
 ## SUMMARY
 
 {summary}
@@ -124,30 +172,30 @@ ITME를 대상으로, TRL·시장성·이해관계자·도메인 네 관점에�
 | KV cache 데이터 축소 | TurboQuant | KV cache 양자화를 통해 저장량과 메모리 사용량을 줄이는 접근 |
 | 메모리 계층 확장 | ITME | CXL-Hybrid 기반 계층적 메모리 확장으로 용량과 데이터 이동 문제에 접근 |
 
-두 기술은 상호 배타적인 대안으로 가정하지 않는다. 결합 효과는 §5.4의 가설로만
+두 기술은 상호 배타적인 대안으로 가정하지 않는다. 결합 효과는 §5.3의 가설로만
 다룬다.
 
 ## 3. 기술 개요
 
-{state['research']['text']}
+{_claims(approved["research"])}
 
 ## 4. 관점별 평가
 
 ### 4.1 TRL (기술성숙도)
 
-{state['maturity']['text']}
+{_claims(approved["maturity"])}
 
 ### 4.2 시장성
 
-{state['market']['text']}
+{_claims(approved["market"])}
 
 ### 4.3 이해관계자
 
-{state['stakeholder']['text']}
+{_claims(approved["stakeholder"])}
 
-### 4.4 도메인 적용 ({state['domain']})
+### 4.4 도메인 적용 ({domain})
 
-{state['domain_assessment']['text']}
+{_claims(approved["domain_assessment"])}
 
 ## 5. 시사점
 
@@ -159,38 +207,44 @@ ITME를 대상으로, TRL·시장성·이해관계자·도메인 네 관점에�
 
 {conflicts}
 
-### 5.3 근거 공백 (gaps)
-
-{_bullets(synthesis.get('gaps') or [])}
-
-### 5.4 결합 가설 (추론 — 실측 근거 아님)
+### 5.3 결합 가설 (추론 — 실측 근거 아님)
 
 {synthesis.get('combination_hypothesis', '해당 없음')}
 
 ## 6. 한계
 
+**확인된 근거 공백**
+
+{_bullets(_gap_lines(state))}
+
+**조사 시점과 검토 범위**
+
+- 조사 수행 시점: {config.get('started_at', '미상')}
+- 근거 범위: 지정 Doc Pool 색인(papers_core·ecosystem·context)과 이번 실행에서 본문을
+  확보한 웹 자료로 한정한다. 후보로만 조회한 자료는 근거로 쓰지 않는다.
+
+**분석의 한계**
+
 - 본 평가는 공개된 논문·백서·사례 자료를 기반으로 하며 자체 실측 벤치마크가 아니다.
 - TRL·시장성·이해관계자 평가는 공개 정보 기반 추정이므로 실제 최신 상용 배치 현황과 차이가 있을 수 있다.
 - TurboQuant와 ITME의 결합 효과는 동일 시스템에서 함께 측정된 공개 자료가 확인되지 않는 한 실측 결과가 아닌 가설로 다룬다.
 - GPU 벤치마크 수치는 원 논문의 보고값이며 본 프로젝트가 직접 측정한 결과가 아니다.
+- 논문마다 평가 모델·하드웨어·부하 조건이 다르므로 성능 개선 배수만으로 기술 간 우열을 단정하지 않는다.
 - 자동 검증은 인용 ID의 존재 여부, 실행 범위, 허용 자료 범위 등을 결정적으로 검사한다.
-- Claim과 인용 근거의 내용적 적합성은 별도 내용 검토 워크시트에서 사람이 확인한다.
+- Claim과 인용 근거의 내용적 적합성은 내용 검토 워크시트에서 사람이 확인한다.
 - 확증 편향을 줄이기 위해 기술별 검색량을 균형 있게 유지하고, 성능 향상뿐 아니라 잔여 비용과 근거 공백도 함께 기록한다.
 
-{reference.build(
-    manifest=state.get("sources", []),
-    web_sources=state.get("web_sources", []),
-    state=state,
-)}
+{reference.build(state=approved)}
 """
 
     return {
         "report": md,
-        "trace": [
-            {
-                "node": "report",
-                "chars": len(md),
-                "deterministic": True,
-            }
-        ],
+        "trace": [{
+            "node": "report",
+            "status": "ok",
+            "attempt": 1,
+            "chars": len(md),
+            "claims": sum(len(a.get("claims") or []) for a in approved.values()),
+            "deterministic": True,
+        }],
     }

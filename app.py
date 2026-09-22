@@ -79,7 +79,7 @@ def main():
     else:
         state = {"run_id": args.run_id or new_run_id(), "run_status": "running", "trace": [],
                  "run_config": {"domain": args.domain, "model": settings()["llm"],
-                                "limits": settings()["limits"], **config}}
+                                "limits": settings()["limits"], "started_at": utcnow(), **config}}
         start = "setup"
 
     directory = start_run(state)
