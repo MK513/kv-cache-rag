@@ -9,7 +9,7 @@ from src.rag.retrieve import search
 
 @tool
 def search_source_documents(query: str, collection: str, technology: str = "both",
-                            top_k: int = 5) -> list[dict]:
+                            top_k: int = 5, perspective: str = "") -> list[dict]:
     """색인된 컬렉션에서 근거 청크를 검색한다.
 
     Args:
@@ -17,8 +17,10 @@ def search_source_documents(query: str, collection: str, technology: str = "both
         collection: papers_core | ecosystem | context  (필수)
         technology: TurboQuant | ITME | both
         top_k: 반환 개수
+        perspective: research | maturity | market | domain (sources.json 의 perspectives)
     """
-    return search(query, collection=collection, technology=technology, top_k=top_k)
+    return search(query, collection=collection, technology=technology,
+                  top_k=top_k, perspective=perspective or None)
 
 
 @tool
@@ -42,6 +44,7 @@ def format_chunks(chunks: list[dict]) -> str:
     return "\n".join(
         f"<document><id>{c['chunk_id']}</id><collection>{c['collection']}</collection>"
         f"<source>{c['source']}</source><page>{c['page']}</page>"
-        f"<technology>{c['technology']}</technology><content>{c['text']}</content></document>"
+        f"<applies_to>{','.join(c['applies_to'])}</applies_to>"
+        f"<scope>{c['scope']}</scope><content>{c['text']}</content></document>"
         for c in chunks
     )

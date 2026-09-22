@@ -9,7 +9,7 @@ INSTRUCTION = """너는 기술 조사 담당이다. 선정 기술 2건(TurboQuan
 - 접근 방식: 어느 시스템 계층에서 KV cache 병목을 다루는가
 - 적용 범위: 어떤 모델/하드웨어/부하 조건에서 검증되었는가
 - 한계: 원문이 스스로 밝힌 제약과 미해결 항목
-기술별로 절을 나눈다. role=reference 문서(KIVI, InfiniGen)는 계열 비교에만 쓰고,
+기술별로 절을 나눈다. scope=comparison 문서(InfiniGen, PIM/CXL)는 계열 비교에만 쓰고,
 선정 기술의 주장 근거로 대체하지 않는다."""
 
 QUERIES = ["KV 캐시 메모리 병목 접근 방식과 핵심 아이디어", "실험 설정, 한계, 적용 조건"]
@@ -25,7 +25,8 @@ def research(state) -> dict:
     for tech in TECHS:
         for q in queries:
             for c in search_source_documents.invoke(
-                {"query": q, "collection": "papers_core", "technology": tech, "top_k": 5}
+                {"query": q, "collection": "papers_core", "technology": tech,
+                 "perspective": "research", "top_k": 5}
             ):
                 if c["chunk_id"] not in seen:
                     seen.add(c["chunk_id"])
@@ -35,7 +36,7 @@ def research(state) -> dict:
     p = perspective(text, seen)
 
     # 선정 기술(primary)의 근거가 있는지로 평가 보류를 판정한다.
-    covered = {c["technology"] for c in chunks}
+    covered = {t for c in chunks if c["scope"] == "direct" for t in c["applies_to"]}
     status = {t: ("ok" if t in covered else "평가 보류") for t in TECHS}
     gaps = p["gaps"] + [f"{t}: 원문 근거 미확보" for t, s in status.items() if s != "ok"]
 

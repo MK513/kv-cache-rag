@@ -17,12 +17,14 @@ from src.tools.docs import search_source_documents
 def main():
     idx = build()
 
+    b = idx["budget"]
     print("\n=== 매니페스트 ===")
     for m in idx["manifest"]:
-        print(f"  {m['collection']:12s} {m['id']:20s} {m['pages']:3d}쪽 "
-              f"청크 {m['chunks']:4d}  sha256={m['sha256'][:12]}…")
-    print(f"  합계 {sum(m['pages'] for m in idx['manifest'])}쪽 / "
-          f"청크 {len(idx['chunks'])}개")
+        print(f"  {m['collection']:12s} {m['id']:26s} "
+              f"{m.get('pages_counted', 0):6}쪽 {m.get('scope',''):11s} "
+              f"sha256={m['sha256'][:12]}…")
+    print(f"  합계 {b['total_pages']}쪽 / 한도 {b['page_budget']}쪽 "
+          f"({'OK' if b['within_budget'] else '초과'}) · 청크 {len(idx['chunks'])}개")
 
     print("\n=== 키워드 변환 (BM25 축 전용) ===")
     kw, changed = translated("KV 캐시 양자화 처리량 지연")
@@ -48,9 +50,8 @@ def main():
         assert hits, f"{tech} 검색 결과 없음"
         print(f"  {tech}: {len(hits)}건")
 
-    if idx.get("pending"):
-        print(f"\n⚠ 미확정 {len(idx['pending'])}건: {', '.join(idx['pending'])}")
-        print("  papers_core 파이프라인은 정상. R3 가 sources.yaml 을 채우면 전체가 돈다.")
+    for n in idx.get("notes", []):
+        print(f"\n⚠ {n}")
     print("\nOK")
 
 

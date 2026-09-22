@@ -33,7 +33,8 @@ def market(state) -> dict:
     chunks, seen = [], set()
     for q, tech in QUERIES:
         for c in search_source_documents.invoke(
-            {"query": q, "collection": "ecosystem", "technology": tech, "top_k": 5}
+            {"query": q, "collection": "ecosystem", "technology": tech,
+             "perspective": "market", "top_k": 5}
         ):
             if c["chunk_id"] not in seen:
                 seen.add(c["chunk_id"])

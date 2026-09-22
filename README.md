@@ -95,19 +95,29 @@ cross-lingual이라 **한국어 원문 질의를 그대로 넣는 게** 이 모�
 
 ### 3 컬렉션 (설계서 §3)
 
-| 컬렉션 | 내용 | 용도 | 200쪽 가드 |
-|---|---|---|:---:|
-| `papers_core` | 선정 2건(TurboQuant, ITME) + 비교 참조 2건(KIVI, InfiniGen) | research · maturity · domain | 포함 |
-| `ecosystem` | 시장 규모·채택·프레임워크·표준 자료 4건 | market | 포함 |
-| `context` | 데이터센터 추론 배경 1건 | domain (배경 서술만) | 포함 |
-| (웹 조회) | 이해관계자 반응 | stakeholder | **제외** |
+출처 목록은 [`sources.json`](sources.json), 수집·해시·쪽수는
+[`scripts/prepare_sources.py`](scripts/prepare_sources.py) 가 만드는
+`data/manifest.json` 이 단일 원천이다. 상세는 [docs/corpus-prep.md](docs/corpus-prep.md).
 
-웹 문서는 **3,200자 = 1쪽**으로 환산해 가드에 합산한다. 합계 초과 시 적재를 중단한다.
-매니페스트에 SHA-256 · 수집일 · 쪽수 · 청크 수를 기록한다.
+| 컬렉션 | 문서 | 쪽 | 용도 |
+|---|---|---:|---|
+| `papers_core` | turboquant-paper `direct` · itme-paper `direct` · infinigen-paper `comparison` · pim-cxl-paper `comparison` | 70 | research · maturity · domain |
+| `ecosystem` | turboquant-blog · cxl-whitepaper · vllm-quantized-kvcache · vllm-prefix-caching · skhynix-cmm-validation | 15.4 | market |
+| `context` | kv-cache-survey `secondary` | 40 | domain (배경 서술만) |
+| (웹 조회) | 이해관계자 반응 — 색인 안 함 | — | stakeholder |
+| | **합계** | **125.4 / 200** | |
 
-> `papers_core`에서 DeepSeek-V2(~50쪽)는 제외했다. 쪽수 압박이 크고 아키텍처 계열이라
-> 양자화/메모리확장 비교축과 맞지 않는다. `role=reference`(KIVI·InfiniGen)는 계열 비교
-> 인용에만 쓰고 정독·평가셋 대상에서 제외한다.
+웹 문서는 **A4·9.5pt 기준 3,200자 = 1쪽**으로 환산해 가드에 합산한다.
+매니페스트에 SHA-256 · 수집일 · 쪽수 · `page_basis` 를 기록한다.
+
+`scope` 로 근거의 격을 나눈다 — `direct`(선정 기술 1차) / `comparison`(계열 비교) /
+`ecosystem`(인접 생태계, 직접 채택 근거 아님) / `secondary`(2차 자료).
+`perspectives` 는 어느 노드가 그 문서를 볼 수 있는지를 정한다. 검색 시 필터로 걸어
+**비교군 논문이 기술 조사의 1차 근거로 올라오지 않게** 한다.
+
+> `papers_core` 는 ITME 계열 3편 : TurboQuant 계열 1편으로 비대칭이다.
+> 필터가 랭킹 뒤에 걸리므로, 기술·관점 필터가 있을 때는 검색 풀을 4배로 키워
+> 한 기술 근거가 통째로 밀려나지 않게 한다(설계서 §5 확증 편향 완화).
 
 ### 청킹
 
@@ -180,7 +190,16 @@ uv sync
 cp .env.example .env     # OPENAI_API_KEY, TAVILY_API_KEY
 ```
 
-**인덱스만 점검** (LLM 호출 없음 — API 키 불필요):
+**원문 수집 + 매니페스트** (최초 1회):
+
+```bash
+uv run python scripts/prepare_sources.py
+```
+
+`data/raw/` 에 원문이, `data/manifest.json` 에 해시·분량 기록이 생긴다.
+원문은 Git 에서 제외하고, 재현 시 이 명령으로 다시 받아 해시를 대조한다.
+
+**인덱스 점검** (LLM 호출 없음 — API 키 불필요):
 
 ```bash
 uv run python -m scripts.ingest
@@ -215,8 +234,8 @@ uv sync --extra pdf && uv run python -m src.output.pdf
 | 담당 | 트랙 | 파일 |
 |---|---|---|
 | **R1** | Graph & Runtime | `app.py` · `src/{state,graph,llm,settings}.py` · `src/agents/common.py` · `config/settings.yaml` |
-| **R2** | RAG 인프라 (3 컬렉션) | `config/sources.yaml` · `src/rag/{fetch,chunk,embed,index,retrieve,query_kw}.py` · `src/tools/docs.py` · `scripts/ingest.py` |
-| **R3** | 시장성 + 이해관계자 | `src/tools/web_search.py` · `src/agents/{market,stakeholder}.py` · `sources.yaml`의 ecosystem·context **자료 선별** |
+| **R2** | RAG 인프라 (3 컬렉션) | `sources.json` · `scripts/prepare_sources.py` · `src/rag/{chunk,embed,index,retrieve,query_kw}.py` · `src/tools/docs.py` · `scripts/ingest.py` |
+| **R3** | 시장성 + 이해관계자 | `src/tools/web_search.py` · `src/agents/{market,stakeholder}.py` · `sources.json`의 ecosystem·context **자료 선별** |
 | **R4** | 논문 소비 에이전트 + 검색 평가 | `src/agents/{research,maturity,domain}.py` · `eval/` |
 | **R5** | 종합·보고서·출력 | `src/agents/{synthesis,report}.py` · `src/output/{validate,reference,pdf}.py` · `README.md` |
 
@@ -226,7 +245,7 @@ uv sync --extra pdf && uv run python -m src.output.pdf
 ### 시작 전 고정할 인터페이스
 
 1. `src/state.py` 17키의 형식 — **R1**
-2. chunk 스키마와 `search_source_documents(collection 필수)` 시그니처 — **R2**
+2. chunk 스키마와 `search_source_documents(collection 필수)` 시그니처, `sources.json` 의 `scope`·`perspectives` 값 목록 — **R2**
 3. 관점 dict `{text, citations, gaps}` + citation 형식 `chunk_id` — **R1·R5**
 4. **`validation_errors` 형식** `{node, kind, ids}` — **R5**가 쓰고 **R1**이 읽는 유일한 키
 

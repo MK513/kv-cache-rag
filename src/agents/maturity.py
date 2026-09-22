@@ -35,7 +35,8 @@ def maturity(state) -> dict:
     for tech in ["TurboQuant", "ITME"]:
         for q in QUERIES:
             for c in search_source_documents.invoke(
-                {"query": q, "collection": "papers_core", "technology": tech, "top_k": 4}
+                {"query": q, "collection": "papers_core", "technology": tech,
+                 "perspective": "maturity", "top_k": 4}
             ):
                 if c["chunk_id"] not in seen:
                     seen.add(c["chunk_id"])

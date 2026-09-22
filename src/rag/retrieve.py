@@ -27,15 +27,23 @@ def _rrf(ranked_lists: list[tuple[list, float]], k: int) -> list:
 
 
 def search(query: str, collection: str, technology: str = "both",
-           top_k: int | None = None, mode: str = "rrf") -> list[dict]:
-    """mode: 'rrf'(기본) | 'dense'  — eval 에서 두 모드를 분리 비교한다."""
+           top_k: int | None = None, mode: str = "rrf",
+           perspective: str | None = None) -> list[dict]:
+    """mode: 'rrf'(기본) | 'dense'  — eval 에서 두 모드를 분리 비교한다.
+
+    perspective: sources.json 의 perspectives 로 문서를 거른다. 비교군 논문이
+    기술 조사의 1차 근거로 올라오는 것을 막는다.
+    """
     cfg = settings()["retrieval"]
     top_k = top_k or cfg["top_k"]
     store = build()["stores"].get(collection)
     if not store:
         return []
 
-    pool = top_k * 4
+    # 필터는 랭킹 뒤에 적용되므로, 필터가 걸리면 풀을 키워야 실효 top_k 가 유지된다.
+    # papers_core 는 ITME 계열 3편 : TurboQuant 계열 1편으로 비대칭이라
+    # 풀이 작으면 한 기술 근거가 통째로 밀려난다(설계서 §5 확증 편향 완화).
+    pool = top_k * (4 if (technology == "both" and not perspective) else 16)
     dense_docs = store["dense"].similarity_search(query, k=pool)
 
     if mode == "dense":
@@ -50,14 +58,19 @@ def search(query: str, collection: str, technology: str = "both",
         )
 
     if technology != "both":
-        ranked = [d for d in ranked if d.metadata.get("technology") in (technology, "")]
+        ranked = [d for d in ranked
+                  if technology in (d.metadata.get("applies_to") or [technology])]
+    if perspective:
+        ranked = [d for d in ranked
+                  if perspective in (d.metadata.get("perspectives") or [perspective])]
 
     return [
         {
             "chunk_id": d.metadata["chunk_id"],
             "collection": d.metadata["collection"],
             "source": d.metadata["source"],
-            "technology": d.metadata.get("technology", ""),
+            "applies_to": d.metadata.get("applies_to", []),
+            "scope": d.metadata.get("scope", ""),
             "page": d.metadata["page"],
             "text": d.page_content,
         }
