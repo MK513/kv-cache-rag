@@ -29,7 +29,7 @@ def execute(state, *, start="setup", **mock_kw):
 
 
 def run(root):
-    root = Path(root).resolve()
+    root = Path(root)      # resolve 하지 않는다 — 증빙에 로컬 절대경로를 남기지 않기 위해
     if root.exists():
         raise ValueError("새 root 를 쓸 것 — 이전 증빙을 덮어쓰지 않는다")
     root.mkdir(parents=True)
