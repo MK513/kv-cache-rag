@@ -1,0 +1,13 @@
+{"node": "setup", "status": "ok"}
+{"node": "research", "status": "ok"}
+{"node": "domain_assessment", "status": "ok"}
+{"node": "market", "status": "ok"}
+{"node": "maturity", "status": "ok"}
+{"node": "stakeholder", "status": "ok"}
+{"node": "collect_evidence", "status": "ok", "attempt": 1, "timestamp": "2026-09-22T01:54:10.936120+00:00", "sources": 1, "evidence": 1, "gaps": 0}
+{"node": "synthesis", "status": "ok"}
+{"node": "review", "status": "ok"}
+{"node": "final_check", "status": "partial", "attempt": 1, "timestamp": "2026-09-22T01:54:10.936670+00:00", "review": "pending"}
+{"node": "save_draft", "status": "partial", "attempt": 1, "timestamp": "2026-09-22T01:54:10.937186+00:00", "path": "docs/evidence/r1/runs/r1-review-pending/draft.json"}
+{"node": "final_check", "status": "completed", "attempt": 1, "timestamp": "2026-09-22T01:54:10.940357+00:00", "review": "passed"}
+{"node": "report", "status": "ok"}
