@@ -4,7 +4,7 @@
 언어별(ko/en) × 모드별(dense/rrf)로 분리 측정하고, 같은 사실(fact)의 한/영 질의가
 모두 top_k 내에 회수된 비율인 '완전 회수율(Full Recovery Rate)'을 산출합니다.
 
-팀 인터페이스 계약(§③ search_source_documents 시그니처 및 chunk 스키마)을 준수합니다.
+팀 인터페이스 계약(§③ chunk 스키마 및 검색 파라미터 규약)을 준수합니다.
 
 실행 방법:
     uv run python -m eval.retrieval_metrics
@@ -25,11 +25,6 @@ sys.path.insert(0, str(_ROOT))
 os.chdir(_ROOT)
 
 from src.rag.retrieve import search
-
-try:
-    from src.tools.docs import search_source_documents
-except ImportError:
-    search_source_documents = None
 
 GOLDEN = Path("eval/goldenset.json")
 OUTPUT_JSON = Path("eval/retrieval_results.json")
