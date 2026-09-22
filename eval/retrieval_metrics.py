@@ -26,7 +26,7 @@ from src.rag.retrieve import search
 GOLDEN = Path("eval/goldenset.json")
 KS = (1, 3, 5)
 MIN_N = 12          # 셀당 표본이 이보다 적으면 경향만 본다는 경고를 낸다
-MODES = ("dense", "rrf")
+MODES = ("dense",)  # R3: RRF/BM25 재도입은 실패 질의 분석 후 별도 결정.
 
 
 def rank_of(item: dict, mode: str) -> int | None:
