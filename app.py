@@ -96,12 +96,19 @@ def main():
         raise                       # 스택 트레이스를 삼키지 않는다
 
     status = finish(final, final.get("run_status", "failed"))
-    print({
-        "completed": f"완료: {final.get('report_paths') or directory}",
-        "partial": f"부분 완료 ({directory}) — 검토 대기면 draft.json 의 validation·review_status 를 "
-                   f"고치고 `--resume {state['run_id']}`",
-        "failed": f"실패: {directory/'run.json'} 확인",
-    }[status])
+    pending = (final.get("validation") or {}).get("pending_claims") or []
+
+    if final.get("review_status") == "pending":
+        # §8 — ID 대조만으로 자동 통과시키지 않는다. 사람이 주장과 근거를 나란히 본다.
+        print(f"검토 대기 — Claim {len(pending)}건. {directory/'review.csv'} 의 "
+              f"review_result(확인|부결)·reviewer 를 채운 뒤\n"
+              f"  uv run python app.py --resume {state['run_id']}")
+    else:
+        print({
+            "completed": f"완료: {final.get('report_paths') or directory}",
+            "partial": f"부분 완료 — 평가 보류 항목이 남았다. 보고서: {final.get('report_paths') or directory}",
+            "failed": f"실패: {directory/'run.json'} 확인",
+        }[status])
     return status
 
 
