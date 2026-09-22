@@ -136,7 +136,8 @@
       "perspectives": ["domain"],
       "scope": "secondary",
       "excerpt_only": true,
-      "note": "2차 자료. 분류 체계 장만 발췌해 도메인 맥락에 사용하고 성능 주장 근거로 인용하지 않는다."
+      "excerpt_pages": [1, 32],
+      "note": "2차 자료. 분류 체계(1~32쪽, Related Work 포함)만 발췌하고 참고문헌(33~40쪽)은 색인에서 제외한다. 도메인 맥락에만 사용하며 성능 주장 근거로 인용하지 않는다."
     }
   ]
 }

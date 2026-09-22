@@ -1,10 +1,11 @@
 {
   "_readme": [
-    "담당: R4 — 설계서 §4 평가셋. 20문항, 두 기술에 균등 배분(각 10).",
+    "담당: R2 — 설계서 §4 평가셋. 20문항, 두 기술에 균등 배분(각 10).",
     "fact_id 는 같은 사실의 한/영 쌍을 묶는다 — '완전 회수율'(ko·en 모두 회수) 계산용.",
-    "반드시 원문에서 페이지를 직접 확인하고 채울 것. 확인 안 한 문항은 넣지 않는다.",
-    "주의: ko/en × dense/rrf 로 나누면 셀당 n=10 이다. metrics 가 n<12 면 경고를 낸다.",
-    "      dense vs RRF 비교를 주장하려면 24~30문항으로 늘리는 편이 안전하다."
+    "gold_source 는 sources.json 의 id 값과 같다 (turboquant-paper / itme-paper).",
+    "모든 문항은 data/raw/turboquant-paper.pdf, data/raw/itme-paper.pdf 원문에서 직접",
+    "페이지를 확인하고 작성했다 (2026-09-22, R2 권수진).",
+    "주의: ko/en 로만 나누면 셀당 n=10 이다. metrics 가 n<12 면 표본 부족 경고를 낸다."
   ],
   "items": [
     {
@@ -12,18 +13,180 @@
       "fact_id": "tq-01",
       "lang": "ko",
       "technology": "TurboQuant",
-      "question": "TODO: 원문에서 확인한 사실을 한국어 질의로",
-      "gold_source": "turboquant",
-      "gold_page": 0
+      "question": "TurboQuant의 MSE 왜곡은 정보이론적 하한(lower bound)의 약 몇 배 이내로 근접하는가?",
+      "gold_source": "turboquant-paper",
+      "gold_page": 6
     },
     {
       "id": "tq-01-en",
       "fact_id": "tq-01",
       "lang": "en",
       "technology": "TurboQuant",
-      "question": "TODO: same fact, English query",
-      "gold_source": "turboquant",
-      "gold_page": 0
+      "question": "Within roughly what factor of the information-theoretic lower bound is TurboQuant's MSE distortion?",
+      "gold_source": "turboquant-paper",
+      "gold_page": 6
+    },
+    {
+      "id": "tq-02-ko",
+      "fact_id": "tq-02",
+      "lang": "ko",
+      "technology": "TurboQuant",
+      "question": "TurboQuant 논문의 KV 캐시 압축 비교 실험에서, 각 방법을 비교할 때 전체 KV 캐시의 몇 %만 사용하는 압축률 조건을 적용했는가?",
+      "gold_source": "turboquant-paper",
+      "gold_page": 17
+    },
+    {
+      "id": "tq-02-en",
+      "fact_id": "tq-02",
+      "lang": "en",
+      "technology": "TurboQuant",
+      "question": "In the TurboQuant paper's KV cache compression comparison, what memory compression ratio (fraction of the full KV cache used) was applied when benchmarking the methods?",
+      "gold_source": "turboquant-paper",
+      "gold_page": 17
+    },
+    {
+      "id": "tq-03-ko",
+      "fact_id": "tq-03",
+      "lang": "ko",
+      "technology": "TurboQuant",
+      "question": "Needle-in-a-Haystack 테스트에서 TurboQuant는 몇 배 이상 양자화되었음에도 비압축 기준선과 동일한 성능을 보였는가?",
+      "gold_source": "turboquant-paper",
+      "gold_page": 19
+    },
+    {
+      "id": "tq-03-en",
+      "fact_id": "tq-03",
+      "lang": "en",
+      "technology": "TurboQuant",
+      "question": "In the Needle-in-a-Haystack test, by how much was TurboQuant quantized while still matching the uncompressed full-precision baseline's performance?",
+      "gold_source": "turboquant-paper",
+      "gold_page": 19
+    },
+    {
+      "id": "tq-04-ko",
+      "fact_id": "tq-04",
+      "lang": "ko",
+      "technology": "TurboQuant",
+      "question": "Llama-3.1-8B-Instruct에서 TurboQuant(2.5비트)의 LongBench 평균 점수는 얼마이며, Full Cache(16비트) 기준선과 비교해 어떠한가?",
+      "gold_source": "turboquant-paper",
+      "gold_page": 20
+    },
+    {
+      "id": "tq-04-en",
+      "fact_id": "tq-04",
+      "lang": "en",
+      "technology": "TurboQuant",
+      "question": "What is TurboQuant's (2.5-bit) average LongBench score on Llama-3.1-8B-Instruct, and how does it compare to the Full Cache (16-bit) baseline?",
+      "gold_source": "turboquant-paper",
+      "gold_page": 20
+    },
+    {
+      "id": "tq-05-ko",
+      "fact_id": "tq-05",
+      "lang": "ko",
+      "technology": "TurboQuant",
+      "question": "4비트 양자화, d=1536 차원 기준으로 TurboQuant의 양자화 소요 시간은 Product Quantization 및 RabitQ와 비교해 어떠한가?",
+      "gold_source": "turboquant-paper",
+      "gold_page": 20
+    },
+    {
+      "id": "tq-05-en",
+      "fact_id": "tq-05",
+      "lang": "en",
+      "technology": "TurboQuant",
+      "question": "At 4-bit quantization with d=1536, how does TurboQuant's quantization time compare to Product Quantization and RabitQ?",
+      "gold_source": "turboquant-paper",
+      "gold_page": 20
+    },
+    {
+      "id": "itme-01-ko",
+      "fact_id": "itme-01",
+      "lang": "ko",
+      "technology": "ITME",
+      "question": "ITME는 모델 가중치(Weights)와 장문 컨텍스트 KV 캐시(Long-context KV)를 어떤 메모리 티어에 배치하는가?",
+      "gold_source": "itme-paper",
+      "gold_page": 2
+    },
+    {
+      "id": "itme-01-en",
+      "fact_id": "itme-01",
+      "lang": "en",
+      "technology": "ITME",
+      "question": "Which memory tier does ITME place model weights and long-context KV caches in?",
+      "gold_source": "itme-paper",
+      "gold_page": 2
+    },
+    {
+      "id": "itme-02-ko",
+      "fact_id": "itme-02",
+      "lang": "ko",
+      "technology": "ITME",
+      "question": "ITME는 GPU 메모리 사용량을 몇 GB로 안정적으로 유지하면서 몇 GB를 Host/CXL 스테이징으로 오프로딩하는가?",
+      "gold_source": "itme-paper",
+      "gold_page": 9
+    },
+    {
+      "id": "itme-02-en",
+      "fact_id": "itme-02",
+      "lang": "en",
+      "technology": "ITME",
+      "question": "How many GB of GPU memory does ITME maintain while offloading how many GB to Host/CXL staging?",
+      "gold_source": "itme-paper",
+      "gold_page": 9
+    },
+    {
+      "id": "itme-03-ko",
+      "fact_id": "itme-03",
+      "lang": "ko",
+      "technology": "ITME",
+      "question": "확장된 turn 구간(21턴 이후)에서 ITME는 CPU-offload 기준선 대비 최대 몇 %의 처리량 개선을 달성하는가?",
+      "gold_source": "itme-paper",
+      "gold_page": 10
+    },
+    {
+      "id": "itme-03-en",
+      "fact_id": "itme-03",
+      "lang": "en",
+      "technology": "ITME",
+      "question": "In the extended turns (beyond turn 21), what is the maximum throughput improvement ITME achieves over the CPU-offload baseline?",
+      "gold_source": "itme-paper",
+      "gold_page": 10
+    },
+    {
+      "id": "itme-04-ko",
+      "fact_id": "itme-04",
+      "lang": "ko",
+      "technology": "ITME",
+      "question": "CMM 기반 ITME 구성은 극심한 경합(contention) 상황에서도 몇 GB/s의 대역폭을 유지하며, 이론적 최대 대역폭은 얼마인가?",
+      "gold_source": "itme-paper",
+      "gold_page": 11
+    },
+    {
+      "id": "itme-04-en",
+      "fact_id": "itme-04",
+      "lang": "en",
+      "technology": "ITME",
+      "question": "What bandwidth does the CMM-based ITME configuration sustain even under extreme contention, and what is its theoretical maximum bandwidth?",
+      "gold_source": "itme-paper",
+      "gold_page": 11
+    },
+    {
+      "id": "itme-05-ko",
+      "fact_id": "itme-05",
+      "lang": "ko",
+      "technology": "ITME",
+      "question": "ITME 평가에서 비교 대상으로 사용한 확장판 vLLM 기준선에는 어떤 두 가지 커스텀 구현이 포함되는가?",
+      "gold_source": "itme-paper",
+      "gold_page": 9
+    },
+    {
+      "id": "itme-05-en",
+      "fact_id": "itme-05",
+      "lang": "en",
+      "technology": "ITME",
+      "question": "What two custom implementations does the extended vLLM baseline used for the ITME evaluation include?",
+      "gold_source": "itme-paper",
+      "gold_page": 9
     }
   ]
 }
