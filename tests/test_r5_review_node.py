@@ -8,12 +8,6 @@ import csv
 import pytest
 
 from src.output import review as node
-from src.output import validate
-
-
-@pytest.fixture(autouse=True)
-def no_index(monkeypatch):
-    monkeypatch.setattr(validate, "_build_index", lambda: {"chunks": {}})
 
 
 def assessment(role):

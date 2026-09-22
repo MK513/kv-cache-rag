@@ -87,29 +87,3 @@ def test_duplicate_source_is_removed():
     output = reference.build(state=state)
 
     assert output.count("https://example.com/used") == 1
-
-
-def test_legacy_fallback_still_works():
-    """신형 Assessment가 없으면 기존 manifest 방식도 유지되어야 한다."""
-    manifest = [
-        {
-            "collection": "papers_core",
-            "title": "TurboQuant",
-            "venue": "arXiv",
-            "published": "2025",
-            "pages": 25,
-            "chunks": 100,
-            "sha256": "1234567890abcdef1234567890abcdef",
-            "retrieved_at": "2026-09-22",
-            "url": "https://example.com/paper",
-        }
-    ]
-
-    output = reference.build(
-        manifest=manifest,
-        web_sources=[],
-        state={},
-    )
-
-    assert "TurboQuant" in output
-    assert "https://example.com/paper" in output

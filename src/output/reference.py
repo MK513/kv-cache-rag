@@ -156,84 +156,10 @@ def _format_structured_sources(sources: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _legacy_build(manifest: list[dict], web_sources: list[dict]) -> str:
-    """구형 State를 위한 기존 fallback."""
-    lines = ["## REFERENCE", ""]
+def build(state: dict) -> str:
+    """최종 REFERENCE — 실제 Claim 이 사용한 Source 만 역추적한다(설계서 §8).
 
-    for heading, cols in GROUPS:
-        rows = [
-            item
-            for item in manifest
-            if item.get("collection") in cols
-        ]
-
-        lines += [f"### {heading}", ""]
-
-        for item in rows:
-            tag = f" · {item['role']}" if item.get("role") else ""
-
-            lines.append(
-                f"- {item.get('title', '제목 미확인')}. "
-                f"*{item.get('venue', '')}*{tag} "
-                f"({item.get('published', '날짜 미확인')}). "
-                f"{item.get('pages', '?')}쪽 / "
-                f"청크 {item.get('chunks', '?')}개. "
-                f"SHA-256 `{str(item.get('sha256', ''))[:16]}…`  \n"
-                f"  수집 {item.get('retrieved_at', '미확인')} · "
-                f"{item.get('url', '')}"
-            )
-
-        if not rows:
-            lines.append("- 해당 없음")
-
-        lines.append("")
-
-    lines += ["### [C] 웹 조회 자료", ""]
-
-    seen = set()
-
-    for item in sorted(
-        web_sources or [],
-        key=lambda value: value.get("url", ""),
-    ):
-        url = item.get("url", "")
-
-        if not url or url in seen:
-            continue
-
-        seen.add(url)
-
-        lines.append(
-            f"- [{item.get('source_type', '미확인')}] "
-            f"{item.get('title', '제목 미확인')}. "
-            f"게시 {item.get('published_at', '미확인')} · "
-            f"수집 {item.get('retrieved_at', '미확인')}  \n"
-            f"  {url}"
-        )
-
-    if not seen:
-        lines.append("- 확인된 웹 자료 없음")
-
-    return "\n".join(lines)
-
-
-def build(
-    manifest: list[dict] | None = None,
-    web_sources: list[dict] | None = None,
-    state: dict | None = None,
-) -> str:
-    """최종 REFERENCE 생성.
-
-    state에 신형 Assessment가 있으면 실제 Claim 사용 출처만 역추적한다.
-    그렇지 않으면 기존 manifest/web_sources 방식으로 fallback한다.
+    §9 — 본문에서 실제 사용한 논문과 확인한 웹 자료만 적고, 후보로만 조회한 자료는
+    제외한다. 사용 출처가 없으면 각 절에 "해당 없음" 이 남는다.
     """
-    if state:
-        used_sources = _used_sources(state)
-
-        if used_sources:
-            return _format_structured_sources(used_sources)
-
-    return _legacy_build(
-        manifest or [],
-        web_sources or [],
-    )
+    return _format_structured_sources(_used_sources(state))

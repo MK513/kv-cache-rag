@@ -2,18 +2,7 @@
 
 LLM 채점이 아니라 결정적 검사를 수행한다.
 
-지원 구조
-1) 구형 Assessment
-   {text, citations, gaps, bad_citations}
-
-2) 신형 Assessment
-   {
-       claims: [...],
-       evidence: [...],
-       sources: [...],
-       gaps: [...],
-       status: ...
-   }
+검사 대상은 `schema.Assessment` 다 — claims / evidence / sources / gaps / status.
 
 자동 검증은 구조와 출처 연결을 확인한다.
 Claim 내용이 실제 근거에서 의미적으로 도출되는지는
@@ -29,52 +18,6 @@ RAG_NODES = {
 }
 
 WEB_NODES = {"stakeholder"}
-
-
-def _build_index():
-    """RAG index를 실제 검증 시점에만 로드한다.
-
-    validate.py import 시점에 pdfplumber 등 R2 의존성을 불러오지 않도록
-    지연 import한다. 단위 테스트에서는 이 함수를 monkeypatch한다.
-    """
-    from src.rag.index import build
-
-    return build()
-
-
-def _legacy_rag_errors(
-    node_name: str,
-    assessment: dict,
-    valid_chunk_ids: set[str],
-) -> list[dict]:
-    """구형 {text, citations, bad_citations} 구조를 검사한다."""
-    errors = []
-
-    citations = assessment.get("citations") or []
-    bad = set(assessment.get("bad_citations") or [])
-
-    # common.py를 거치지 않은 데이터도 방어적으로 다시 검사
-    bad.update(
-        citation
-        for citation in citations
-        if citation not in valid_chunk_ids
-    )
-
-    if bad:
-        errors.append({
-            "node": node_name,
-            "kind": "없는 인용 ID",
-            "ids": sorted(bad),
-        })
-
-    if not citations:
-        errors.append({
-            "node": node_name,
-            "kind": "인용 누락",
-            "ids": [],
-        })
-
-    return errors
 
 
 def _structured_errors(
@@ -239,7 +182,6 @@ def check(state) -> dict:
 
     재시도 횟수는 세지 않는다. 부록 A: *재시도는 노드 내부의 최대 1회 처리다.*
     """
-    valid_chunk_ids = set(_build_index()["chunks"])
     current_run_id = state.get("run_id")
 
     errors = []
@@ -258,25 +200,13 @@ def check(state) -> dict:
         if not assessment:
             continue
 
-        # 신형 구조
-        if "claims" in assessment:
-            errors.extend(
-                _structured_errors(
-                    node_name=node_name,
-                    assessment=assessment,
-                    current_run_id=current_run_id,
-                )
+        errors.extend(
+            _structured_errors(
+                node_name=node_name,
+                assessment=assessment,
+                current_run_id=current_run_id,
             )
-
-        # 구형 RAG 구조
-        elif node_name in RAG_NODES:
-            errors.extend(
-                _legacy_rag_errors(
-                    node_name=node_name,
-                    assessment=assessment,
-                    valid_chunk_ids=valid_chunk_ids,
-                )
-            )
+        )
 
     # conflicts == [] 는 정상일 수 있으므로 오류로 처리하지 않는다.
 

@@ -14,7 +14,7 @@ import pytest
 
 from src.agents import domain, market, maturity, research
 from src.graph import build_graph, invoke
-from src.output import pdf, validate
+from src.output import pdf
 from src.schema import Assessment
 
 # 노드별 허용 컬렉션이 다르다(§3). 시장 근거를 papers_core 에서 주면 검증이 막는다.
@@ -111,8 +111,6 @@ def wired(monkeypatch, tmp_path):
 
     monkeypatch.setattr(synthesis_module, "get_llm", lambda: FakeSynthesis())
     monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
-    monkeypatch.setattr(validate, "_build_index",
-                        lambda: {"chunks": {c["chunk_id"]: c for c in CHUNKS}})
     monkeypatch.setattr("src.rag.index.build", lambda: {"manifest": [{"id": "turboquant-paper"}]})
     monkeypatch.setattr(pdf, "render_pdf",
                         lambda md, out: (out.parent.mkdir(parents=True, exist_ok=True),
