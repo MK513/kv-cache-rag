@@ -34,9 +34,9 @@ uv run python -m scripts.r1_smoke --root /tmp/kv-r1-run    # 그래프 4경로 (
 uv run python -m scripts.r3_smoke --root /tmp/kv-r3-run    # 검색·웹 (합성 fixture)
 ```
 
-**`uv run python app.py`는 아직 끝까지 돌지 않는다.** R4/R5가 `schema.Assessment` 계약으로
-이행하기 전이라 `research` 노드에서 멈추고 실패를 기록한다. 숨기지 않는다.
-smoke가 남기는 보고서·주장은 합성 데이터이며 실제 기술 평가가 아니다.
+`uv run python app.py` 는 **검토 대기에서 멈춘다.** 실패가 아니라 설계서 §8 이 요구하는
+사람의 내용 검토 단계다. 전체 절차는 [7. 실행](#7-실행) 참고.
+smoke 가 남기는 보고서·주장은 합성 데이터이며 실제 기술 평가가 아니다.
 
 ---
 
@@ -293,60 +293,163 @@ uv run python -m eval.find_failed_queries
 
 ## 7. 실행
 
-```bash
-uv sync
-cp .env.example .env     # OPENAI_API_KEY, TAVILY_API_KEY
-```
-
-**원문 수집 + 매니페스트** (최초 1회):
+### 0. 준비
 
 ```bash
-uv run python scripts/prepare_sources.py
+uv sync                          # 파이프라인 의존성
+uv sync --extra pdf              # PDF 제출본까지 만들 때만
+brew install pango               # macOS. weasyprint 가 libpango 를 요구한다
+cp .env.example .env
 ```
 
-`data/raw/` 에 원문이, `data/manifest.json` 에 해시·분량 기록이 생긴다.
-원문은 Git 에서 제외하고, 재현 시 이 명령으로 다시 받아 해시를 대조한다.
+`.env` 에 키 두 개가 필요하다. **둘 다 없으면 실행이 시작되지 않는다.**
 
-**인덱스 점검** (LLM 호출 없음 — API 키 불필요):
+| 키 | 쓰는 곳 | 없으면 |
+|---|---|---|
+| `OPENAI_API_KEY` | 기술 조사·TRL·시장성·도메인·이해관계자·종합 | `get_llm()` 이 `OpenAIError` 로 즉시 중단 |
+| `TAVILY_API_KEY` | 이해관계자 노드의 웹 검색 | stakeholder 가 `status=failed` → 실행 전체 failed |
+
+`pango` 가 없어도 파이프라인은 정상 종료한다. Markdown 까지만 나오고 그 사실이
+`runs/<run_id>/submission.json` 에 남는다.
+
+### 1. 원문 수집 (최초 1회)
+
+```bash
+uv run python scripts/prepare_sources.py            # 기본: 해시만 검증 (재수집 안 함)
+uv run python scripts/prepare_sources.py --refresh  # 원문 재수집 + 매니페스트 갱신
+```
+
+`data/raw/` 에 원문이, `data/manifest.json` 에 해시·분량 기록이 생긴다. 원문은 Git 에서
+제외한다(15MB).
+
+> **`--refresh` 는 함부로 쓰지 마라.** 원문이 바뀌면 청크가 바뀌고 `chunk_id` 가 전부
+> 달라진다. 이전 실행의 인용이 가리키던 원문이 사라지고 `eval/goldenset.json` 라벨도
+> 다시 해야 한다. 실제로 `turboquant-blog` 원문이 한 번 바뀐 적이 있다.
+
+### 2. 인덱스 점검 (선택, API 키 불필요)
 
 ```bash
 uv run python -m scripts.ingest
 ```
 
-수집 → 200쪽 가드 → 청킹 → 컬렉션 분리 → 키워드 변환 → 기술별 필터를 한 번에 검증한다.
+수집 → 200쪽 가드 → 청킹 → 컬렉션 분리 → 기술별 필터를 한 번에 확인한다.
 
-**전체 파이프라인**:
+### 3. 파이프라인 실행
 
 ```bash
 uv run python app.py
 ```
 
-첫 실행은 **검토 대기**로 멈춘다(설계서 §8 — ID 대조만으로 자동 통과시키지 않는다).
-`runs/<run_id>/review.csv` 의 `review_result`(확인|부결)·`reviewer` 를 채우고 재개한다.
+`setup` 이 원문 SHA-256 을 매니페스트와 대조한다(설계서 §3). 어긋나면 경고를 출력하고
+**실행을 중단한다** — 의도한 갱신이면 `--refresh` 로 매니페스트를 다시 만든다.
+
+**첫 실행은 반드시 검토 대기로 멈춘다.** 실패가 아니다. 설계서 §8 이 *이 과정은 ID
+대조만으로 자동 통과시키지 않는다. 팀원이 주장과 근거를 나란히 보고 확인한다* 라고
+정한다. 이 단계에서는 보고서도 PDF 도 나오지 않는다.
+
+```
+검토 대기 — Claim 14건. runs/<run_id>/review.csv 의 review_result(확인|부결)·reviewer 를 채운 뒤
+  uv run python app.py --resume <run_id>
+```
+
+### 4. 내용 검토
+
+주장과 근거를 나란히 읽는다.
 
 ```bash
-uv run python -m scripts.review_reader <run_id> --pending   # 주장과 근거를 나란히 읽기
+uv run python -m scripts.review_reader <run_id> --pending
+uv run python -m scripts.review_reader <run_id> --claim <claim_id>   # 하나만
+```
+
+`runs/<run_id>/review.csv` 의 **마지막 세 열**만 채운다. 앞 열은 읽기용이다.
+
+| 열 | 값 |
+|---|---|
+| `review_result` | `확인` 또는 `부결` (`통과`·`승인`·`ok` / `반려`·`reject` 도 받는다) |
+| `reviewer` | 검토자 이름 |
+| `review_comment` | 사유. **부결이면 보고서 §6 에 그대로 실린다** |
+
+한 `claim_id` 당 **한 행만** 채우면 된다(같은 Claim 이 근거 수만큼 행을 갖는다).
+값이 `확인`/`부결` 어느 쪽도 아니면 *판정 값 미상* 오류로 실행이 `failed` 가 된다.
+
+§8 이 요구하는 확인 항목 — **성능 수치의 단위·비교 기준선·실험 조건, TRL 단계의 근거,
+직접 채택과 인접 생태계 자료의 구분.**
+
+### 5. 재개 → 보고서 + 제출본
+
+```bash
 uv run python app.py --resume <run_id>
 ```
 
-판정은 `reviews/verdicts.json` 에 쌓인다. 다음 실행에서 **주장 문장과 인용 근거가 완전히
-같은 Claim** 은 이 원장의 판정을 자동으로 물려받으므로 다시 검토하지 않는다. 한 글자라도
-다르면 사람이 읽은 것이 아니므로 미판정으로 남는다. 전부 새로 검토하려면
-`--no-carry-review` 를 준다.
+| 산출물 | 경로 |
+|---|---|
+| 보고서 Markdown | `runs/<run_id>/report.md` |
+| 제출본 PDF | `runs/<run_id>/final/RAG-Output_판교_8반_….pdf` |
+| 생성 여부와 사유 | `runs/<run_id>/submission.json` |
+| 검토 기록 | `runs/<run_id>/review.csv` |
+| 실행 기록 | `runs/<run_id>/run.json` · `trace.jsonl` · `state.json` |
 
-**PDF** (그래프와 분리 — 폰트 문제로 파이프라인이 죽지 않게):
+PDF 는 **검증을 통과했을 때만** 나온다(§8 — 무효 인용이 남으면 제출용 출력을 막는다).
+품질 점검(SUMMARY 분량·한글 글꼴·표 잘림·참고문헌 위치, §9)에 걸려도 만들지 않는다.
+왜 안 나왔는지는 `submission.json` 에 적힌다.
 
-```bash
-uv sync --extra pdf && uv run python -m src.output.pdf
-```
+### run_status 읽는 법
+
+| 값 | 뜻 |
+|---|---|
+| `completed` | 보고서 생성, 평가 보류 항목 없음 |
+| `partial` | 검토 대기로 멈췄거나, 근거 공백이 남은 채 보고서를 냈다 |
+| `failed` | Assessment 중 failed, 미해결 인용 오류, 병합 오류 |
+
+---
+
+## 재현성 — 어디까지 되고 어디부터 안 되는가
+
+**같은 보고서가 다시 나오지 않는다.** 이 파이프라인은 그것을 목표로 하지 않는다.
+
+| 단계 | 재현 |
+|---|---|
+| 원문 → 청킹 → 임베딩 → 인덱스 | ✅ 코퍼스 해시와 임베딩 revision(`src/rag/embed.py`)이 고정돼 있다 |
+| 검색 결과 · `chunk_id` | ✅ 같은 인덱스면 동일 |
+| **주장 문장** | ❌ 모델이 매 실행 다시 쓴다 |
+| **이해관계자 근거** | ❌ 매 실행 웹을 새로 검색한다 |
+
+측정값: 같은 코퍼스로 두 번 돌렸을 때 `maturity` 노드가 **인용 근거 5건이 완전히 같은데
+본문 유사도 0.258** 이었다. `langchain_openai` 가 `gpt-5.6-luna` 에 대해 `temperature` 를
+보내지 않고(추론형 모델로 취급) `seed` 도 무시되기 때문이다. 자세한 조사는
+[docs/reproducibility-plan.md](docs/reproducibility-plan.md).
+
+**클론한 사람이 같은 결과를 얻을 수 없다.** `data/raw/`(원문)와 `.cache/`(모델 응답
+캐시)가 Git 에서 제외되고, 웹 검색 결과는 애초에 매일 바뀐다. 검증이 목적이라면 재실행이
+아니라 `runs/<run_id>/` 의 보고서·근거·검토 기록을 직접 보는 쪽이 맞다.
+
+### 재검토를 줄이는 두 장치
+
+둘 다 재현성의 대체재가 아니라 **사람의 시간을 아끼는 안전망**이다.
+
+**검토 판정 원장** `reviews/verdicts.json` (Git 에 커밋된다)
+재개가 끝나면 판정이 자동으로 쌓인다. 다음 실행에서 **node·technology·kind·주장 문장·
+인용 근거가 모두 같은** Claim 만 판정을 물려받는다. 한 글자라도 다르면 사람이 읽은 것이
+아니므로 미판정으로 남는다. 이월된 판정은 보고서 §6 에 건수와 출처 run_id 가 공시된다.
+전부 새로 검토하려면 `--no-carry-review`.
+
+**모델 응답 캐시** `.cache/llm.sqlite` (Git 제외, 기계마다 따로 쌓인다)
+키가 프롬프트 전문 + 모델 파라미터다. 같은 코퍼스·같은 지시문이면 같은 응답이 나온다.
+프롬프트를 고치면 자동으로 새로 생성한다. 적중 수는 `run.json` 의 `llm` 과 보고서 §6 에
+남는다 — 적중은 *이번 실행에서 모델이 새로 판단하지 않았다* 는 뜻이다.
+
+이해관계자 노드는 매 실행 웹을 새로 조사하므로 **프롬프트가 달라져 캐시가 적중하지 않고,
+그 Claim 들은 매번 새로 검토해야 한다.**
 
 ### 모델 설정
 
-`config/settings.yaml`의 `llm.model`이 기본값이고 `.env`의 `LLM_MODEL`이 우선한다.
+`config/settings.yaml` 의 `llm.model` 이 기본값이고 `.env` 의 `LLM_MODEL` 이 우선한다.
+실제로 적용된 `temperature`·`seed` 는 `runs/<run_id>/run.json` 의 `llm` 에 기록된다
+(설정 파일 값과 다를 수 있다 — 위 재현성 절 참고).
 
-> ⚠️ **첫 실행 전 확인**: `gpt-5.6-luna`가 팀 계정에서 호출되는지, 그리고
-> **`with_structured_output`(tool calling)을 지원하는지**. 미지원이면 `synthesis`의
-> `conflicts` 최소 1건 강제가 무너진다. 안 되면 `.env`에 `LLM_MODEL=gpt-4.1-mini`.
+> ⚠️ **첫 실행 전 확인**: `gpt-5.6-luna` 가 팀 계정에서 호출되는지, 그리고
+> **`with_structured_output`(tool calling)을 지원하는지**. 미지원이면 `synthesis` 의
+> 구조화 출력이 무너진다. 안 되면 `.env` 에 `LLM_MODEL=gpt-4.1-mini`.
 
 ---
 
