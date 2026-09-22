@@ -161,3 +161,20 @@ def test_claim_kind_is_visible(monkeypatch):
     assert "**[사실 · ITME]**" in markdown
     assert "**[가설 · both]**" in markdown
     assert "> 전제: 개별 근거에서 도출한 추론이다" in markdown
+
+
+def test_carried_verdicts_are_disclosed(monkeypatch):
+    """§10 — 검토 범위를 명시적으로 기록한다. 이월은 이번 실행에서 다시 본 것이 아니다."""
+    monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
+
+    state = _state() | {"validation": {
+        "carried_claims": ["claim-market"],
+        "claim_verdicts": {"claim-market": {"verdict": "확인", "reviewer": "권예리",
+                                            "carried_from": "20260922-122252-d94611"}},
+    }}
+    limits = report_module.report(state)["report"]
+    limits = limits[limits.index("## 6. 한계"):]
+
+    assert "내용 검토 이월: 주장 1건" in limits
+    assert "20260922-122252-d94611" in limits
+    assert "이번 실행에서 다시 검토하지 않았다" in limits

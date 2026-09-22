@@ -113,3 +113,23 @@ def test_smoke_script_reproduces_every_path(tmp_path):
     assert [c["case"] for c in cases] == ["completed", "review_pending", "resume_after_review",
                                           "unresolved_errors", "merge_conflict"]
     assert all(c["passed"] for c in cases)
+
+
+def test_corpus_hash_mismatch_stops_the_run(tmp_path):
+    """설계서 §3 — 적재할 때 SHA-256 을 다시 확인한다. 조용히 넘어가면 안 된다."""
+    import hashlib
+
+    from src.graph import verify_corpus
+
+    original = tmp_path / "paper.pdf"
+    original.write_bytes(b"original")
+    entry = {"id": "itme-paper", "local_path": str(original),
+             "sha256": hashlib.sha256(b"original").hexdigest()}
+
+    assert verify_corpus({"sources": [entry]}) == []
+
+    original.write_bytes(b"upstream changed the file")
+    assert "SHA-256 불일치" in verify_corpus({"sources": [entry]})[0]
+
+    original.unlink()
+    assert "원문이 없다" in verify_corpus({"sources": [entry]})[0]

@@ -68,6 +68,22 @@ def _claims(assessment: dict) -> str:
     return "\n\n".join(blocks)
 
 
+def _carried(state: dict) -> str:
+    """이월된 검토 판정을 밝힌다(§10 — 조사 수행 시점과 정보의 검토 범위를 명시적으로 기록).
+
+    주장과 근거가 완전히 같을 때만 옮기지만, 사람이 **이번 실행에서** 다시 본 것은 아니다.
+    """
+    validation = state.get("validation") or {}
+    carried = validation.get("carried_claims") or []
+    if not carried:
+        return ""
+    verdicts = validation.get("claim_verdicts") or {}
+    runs = sorted({(verdicts.get(cid) or {}).get("carried_from", "") for cid in carried} - {""})
+    return (f"- 내용 검토 이월: 주장 {len(carried)}건은 이전 실행"
+            f"{'(' + ', '.join(runs) + ')' if runs else ''}의 판정을 그대로 사용했다. "
+            f"주장 문장과 인용 근거가 완전히 같은 경우에만 옮겼으며, 이번 실행에서 다시 검토하지 않았다.")
+
+
 def _gap_lines(state: dict) -> list[str]:
     """§6 한계에 실을 근거 공백. 검토 부결 항목도 여기로 옮긴다(§8)."""
     lines = [f"{gap.get('technology', '')} {gap.get('item', '')}: {gap.get('reason', '')}".strip()
@@ -222,7 +238,7 @@ ITME를 대상으로, TRL·시장성·이해관계자·도메인 네 관점에�
 - 조사 수행 시점: {config.get('started_at', '미상')}
 - 근거 범위: 지정 Doc Pool 색인(papers_core·ecosystem·context)과 이번 실행에서 본문을
   확보한 웹 자료로 한정한다. 후보로만 조회한 자료는 근거로 쓰지 않는다.
-
+{_carried(state)}
 **분석의 한계**
 
 - 본 평가는 공개된 논문·백서·사례 자료를 기반으로 하며 자체 실측 벤치마크가 아니다.

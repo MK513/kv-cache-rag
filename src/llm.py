@@ -18,9 +18,13 @@ def model_name() -> str:
 
 
 def get_llm(temperature: float | None = None):
+    """seed 를 함께 넘긴다. temperature=0 은 같은 출력을 보장하지 않는다 — 배치 구성이
+    달라지면 문장이 달라진다. 제공자 측 best-effort 라 완전 보장은 아니다."""
     cfg = settings()["llm"]
+    extra = {"seed": cfg["seed"]} if cfg.get("seed") is not None else {}
     return init_chat_model(
         model_name(),
         model_provider="openai",
         temperature=cfg["temperature"] if temperature is None else temperature,
+        **extra,
     )

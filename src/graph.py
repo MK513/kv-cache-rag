@@ -19,6 +19,7 @@
 태우지 않고 실행을 끝낸다.
 """
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -55,6 +56,28 @@ def event(node, status="ok", **fields) -> dict:
 
 # ── R1 소유 노드 ────────────────────────────────────────────────────────────
 
+def verify_corpus(manifest: dict) -> list[str]:
+    """적재 전에 원문 SHA-256 을 다시 확인한다(설계서 §3).
+
+    원문이 바뀌면 청크가 바뀌고 chunk_id 가 전부 달라진다. 조용히 넘어가면 이전 보고서의
+    인용이 가리키던 원문이 사라지고, 두 실행이 왜 다른지 알 수 없게 된다.
+    """
+    problems = []
+    for entry in manifest.get("sources", []):
+        local, expected = entry.get("local_path"), entry.get("sha256")
+        if not local or not expected:
+            continue
+        path = Path(local)
+        if not path.exists():
+            problems.append(f"{entry['id']}: 원문이 없다 ({local})")
+            continue
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != expected:
+            problems.append(f"{entry['id']}: SHA-256 불일치 ({local})\n"
+                            f"    매니페스트 {expected}\n    실제       {actual}")
+    return problems
+
+
 def setup(state) -> dict:
     """설정 확인과 논문 적재. 적재한 자료 버전을 run_config 에 남긴다."""
     if not state.get("run_id"):
@@ -65,7 +88,17 @@ def setup(state) -> dict:
             raise ValueError(f"run_config.{key} 가 없다")
     run_dir(state).mkdir(parents=True, exist_ok=True)
 
-    from src.rag.index import build   # 임베딩을 끌고 오므로 호출 시점에 import 한다
+    from src.rag.index import build, load_manifest   # 임베딩을 끌고 오므로 호출 시점에 import
+
+    problems = verify_corpus(load_manifest())
+    if problems:
+        for line in problems:
+            print(f"[setup] ⚠ {line}")
+        raise ValueError(
+            f"원문 {len(problems)}건이 매니페스트와 다르다. 의도한 갱신이면 "
+            "`uv run python scripts/prepare_sources.py --refresh` 로 매니페스트를 다시 만들고 "
+            "goldenset 재라벨링을 검토할 것")
+
     manifest = build()["manifest"]
     return {"run_config": config | {"sources": manifest},
             "trace": [event("setup", sources=len(manifest), run_id=state["run_id"])]}
