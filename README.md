@@ -5,6 +5,28 @@ LangGraph Multi-Agent + Agentic RAG 기반 평가 보고서 자동 생성
 
 **판교 8반** · 권수진 · 권예리 · 김민 · 박인기 · 정승원
 
+## R3 구현 브랜치 안내 (2026-09-22)
+
+이 브랜치는 최신 설계서의 **검색 계층·웹 근거·이해관계자 노드**를 구현한다.
+아래 기존 본문의 전체 그래프·State·코퍼스 분량은 main의 이전 설계 기록이다.
+R1/R2/R4/R5의 새 구현까지 완료됐다는 의미가 아니다. 특히 기존 `app.py`는 새 run_id와
+Assessment를 연결하는 R1/R5 작업 전까지 R3 통합 실행 경로로 사용할 수 없다.
+
+- 변경 계약과 연결 방법: [docs/interface.md](docs/interface.md#r3-최신-설계서-적용-계약-2026-09-22)
+- R3 인수·검증 결과: [docs/r3-handoff.md](docs/r3-handoff.md)
+- 합성 데이터 실행 증빙: [docs/evidence/r3/checks.json](docs/evidence/r3/checks.json)
+- 검색은 dense 코사인만 사용한다. 기존 RRF 설정은 R3 검색에서 사용하지 않는다.
+- 시장성은 ecosystem RAG를 유지한다. R3는 stakeholder와 trace만 State에 쓴다.
+
+```bash
+uv sync --extra test
+uv run pytest -q
+uv run python -m scripts.r3_smoke --root /tmp/kv-r3-new-run
+```
+
+smoke는 API 키 없이 실제 FAISS·본문 추출·스냅샷 저장·차단 검사를 실행한다.
+검색/LLM 응답과 문서 내용은 합성 fixture다. 실제 기술 평가 결과로 인용하면 안 된다.
+
 ---
 
 ## 1. 무엇을 하는가
