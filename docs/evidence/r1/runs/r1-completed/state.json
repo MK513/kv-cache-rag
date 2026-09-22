@@ -2,14 +2,17 @@
   "run_id": "r1-completed",
   "run_config": {
     "domain": "데이터센터/클라우드 (합성 데이터)",
-    "runs_dir": "docs/evidence/r1/runs"
+    "runs_dir": "docs/evidence/r1/runs",
+    "technologies": [
+      "TurboQuant",
+      "ITME"
+    ],
+    "sources": [
+      {
+        "id": "mock-paper"
+      }
+    ]
   },
-  "sources_manifest": [
-    {
-      "id": "mock-paper",
-      "collection": "papers_core"
-    }
-  ],
   "research": {
     "claims": [
       {
@@ -210,40 +213,45 @@
     "gaps": [],
     "status": "completed"
   },
-  "registry": {
-    "sources": {
-      "web-mock-1": {
-        "source_id": "web-mock-1",
-        "run_id": "r1-completed",
-        "collection": "web",
-        "allowed_uses": [
-          "stakeholder"
-        ],
-        "title": "web-mock-1 합성 출처",
-        "url": "https://example.org/web-mock-1",
-        "published_at": null,
-        "retrieved_at": "",
-        "sha256": "",
-        "snapshot_path": ""
-      }
-    },
-    "evidence": {
-      "e-web-mock-1": {
-        "evidence_id": "e-web-mock-1",
-        "source_id": "web-mock-1",
-        "run_id": "r1-completed",
-        "collection": "web",
-        "quote": "합성 인용",
-        "location": "paragraph:1",
-        "allowed_uses": [
-          "stakeholder"
-        ],
-        "snapshot_path": "",
-        "sha256": ""
-      }
-    },
-    "gaps": []
+  "source_registry": {
+    "web-mock-1": {
+      "source_id": "web-mock-1",
+      "run_id": "r1-completed",
+      "collection": "web",
+      "allowed_uses": [
+        "stakeholder"
+      ],
+      "title": "web-mock-1 합성 출처",
+      "url": "https://example.org/web-mock-1",
+      "published_at": null,
+      "retrieved_at": "",
+      "sha256": "",
+      "snapshot_path": ""
+    }
   },
+  "evidence_registry": {
+    "e-web-mock-1": {
+      "evidence_id": "e-web-mock-1",
+      "source_id": "web-mock-1",
+      "run_id": "r1-completed",
+      "collection": "web",
+      "quote": "합성 인용",
+      "location": "paragraph:1",
+      "allowed_uses": [
+        "stakeholder"
+      ],
+      "snapshot_path": "",
+      "sha256": ""
+    }
+  },
+  "gaps": [
+    {
+      "role": "synthesis",
+      "technology": "ITME",
+      "item": "결합 실측",
+      "reason": "공개된 결합 실험 없음"
+    }
+  ],
   "synthesis": {
     "agreements": [
       "합성 일치"
@@ -258,11 +266,14 @@
     "gaps": [],
     "combination_hypothesis": "합성 가설"
   },
-  "review": {
+  "validation": {
     "errors": [],
-    "review_status": "passed",
-    "round": 1
+    "reviewer": "합성"
   },
+  "review_status": "passed",
+  "run_status": "completed",
   "report": "# 합성 보고서\n\n인용 1건",
-  "run_status": "completed"
+  "report_paths": [
+    "docs/evidence/r1/runs/r1-completed/report.md"
+  ]
 }

@@ -13,13 +13,15 @@ LangGraph Multi-Agent + Agentic RAG 기반 평가 보고서 자동 생성
 **아래 3절 이후 본문은 이전 설계 기록이다.** R2/R4/R5가 새 계약으로 이행하면 각자 고친다.
 특히 구버전의 `validate_eval`/`validate_final`/`abort`, 관점 dict `{text, citations, gaps}`,
 `evidence` 단일 쓰기 주체, RRF 설정은 더 이상 현행이 아니다.
+State와 그래프는 설계서 §7 표와 부록 A 그래프 소스를 그대로 옮겼다.
 
 | 바뀐 것 | 어디 |
 |---|---|
 | 공용 모델 Claim/Assessment/Source/Evidence/Gap/Synthesis/Event | [`src/schema.py`](src/schema.py) |
-| State 17키 → 14필드, 필드별 단독 쓰기 주체 | [`src/state.py`](src/state.py) · [interface.md ①](docs/interface.md) |
-| 그래프 재배선, 조건부 엣지는 `final_check` 하나 | [`src/graph.py`](src/graph.py) |
-| run_id·`runs/<run_id>/`·run_status·재개 | [`app.py`](app.py) |
+| State — 설계서 §7 표 그대로(14행 / 17필드), 필드별 쓰기 주체 | [`src/state.py`](src/state.py) · [interface.md ①](docs/interface.md) |
+| 그래프 — 부록 A 소스 그대로, 조건부 엣지는 `final_check` 하나 | [`src/graph.py`](src/graph.py) |
+| 내용 검토 계약 `validation`·`review_status` | [interface.md ④](docs/interface.md) |
+| run_id·`runs/<run_id>/`·run_status·검토 후 재개 | [`app.py`](app.py) |
 
 - R1 인수·검증 결과: [docs/r1-handoff.md](docs/r1-handoff.md)
 - 4경로 실행 증빙: [docs/evidence/r1/runs/checks.json](docs/evidence/r1/runs/checks.json)
@@ -52,35 +54,42 @@ HW 진영은 **공간을 넓게** 접근한다. 이 시스템은 두 기술을 T
 
 ```mermaid
 flowchart TD
-  S([START]) --> U[setup · 설정확인/적재]
-  U --> R[research · papers_core]
-  R --> T[maturity · papers_core]
-  R --> M[market · ecosystem]
-  R --> K[stakeholder · 웹]
-  R --> P[domain_assessment · papers_core+context]
-  T --> C[collect_evidence]
+  A[설정 확인과 논문 적재 · setup] --> B[기술 조사와 근거 점검 · research]
+  B --> T[TRL 평가 RAG · maturity]
+  B --> M[시장성 평가 RAG · market]
+  B --> S[이해관계자 평가 웹 · stakeholder]
+  B --> D[도메인 평가 RAG · domain_assessment]
+  T --> C[collect_evidence 네 결과 합류]
   M --> C
-  K --> C
-  P --> C
-  C -->|같은 ID·다른 내용| Z[MergeConflict · run_status=failed]
-  C --> Y[synthesis]
-  Y --> V[review · 내용검토]
-  V --> F{final_check}
-  F -->|통과| G[report] --> E([END])
-  F -->|검토 대기| D[save_draft] --> E
-  F -->|미해결 오류| X[fail] --> E
+  S --> C
+  D --> C
+  C --> F[종합 작성과 주장 검증 · synthesis]
+  F --> R[출처 대조와 내용 검토 · review]
+  R --> V{final_check}
+  V -->|검토 대기| W[검토용 초안 저장 · save_draft]
+  W -->|검토 결과 반영 후 재개| R
+  V -->|미해결 오류| X[failed 오류와 로그 저장 · fail]
+  V -->|통과| G[Markdown과 PDF 생성 · report]
+  G --> Z[레이아웃 확인 후 제출본 저장 · publish]
 ```
 
-**조건부 엣지는 `final_check` 하나뿐이다.** 근거 보완 재조사와 인용 수정 재작성은 노드
-내부 루프로 내렸다(R3 `stakeholder`가 이미 그렇게 한다). 그래프에 되돌아오는 엣지를 두면
-경로가 곱해져 실행 경로를 재현할 수 없다.
+설계서 부록 A의 그래프 소스를 그대로 옮긴 것이다. `docs/evidence/r1/graph.mmd`가
+실제 컴파일된 그래프다.
 
-**병합 오류는 분기가 아니라 예외다.** 같은 ID에 다른 내용이 오면 어느 원문을 가리키는지
-알 수 없다. 조용히 덮어쓰면 R5의 원문 대조가 엉뚱한 출처를 가리키므로, `merge-errors.json`을
-남기고 실행을 끝낸다. 어긋난 근거로 종합·검토에 LLM을 태우지 않는다.
+**재시도는 노드 내부의 최대 1회 처리다**(부록 A). 그래서 조건부 엣지는 `final_check`
+하나뿐이고, 되돌아오는 엣지는 `save_draft → review`(검토 결과 반영 후 재개) 하나뿐이다.
+`final_check`는 인용 오류와 사람의 내용 검토 완료 여부를 함께 확인한다.
 
-**검토 대기는 `draft.json`으로 멈춘다.** 사람이 그 파일의 `review`를 고치고
-`app.py --resume <run_id>`로 재개하면 `final_check`부터 이어 간다 — 평가·종합을 다시 돌리지 않는다.
+**검토 대기는 초안만 저장하고 멈춘다.** 사람의 검토 결과가 있어야 `review`로 돌아갈 수
+있으므로 `save_draft` 뒤에서 실행이 정지한다. 사람이 `draft.json`의 `validation`·
+`review_status`를 고치고 `app.py --resume <run_id>`로 내용 검토부터 이어 간다.
+
+**병합 오류는 분기가 아니라 예외다.** 같은 ID에 다른 내용이 들어오면 어느 원문을
+가리키는지 고를 근거가 없다(§7). `merge-errors.json`을 남기고 실행을 끝낸다 —
+어긋난 근거로 종합·검토에 LLM을 태우지 않는다.
+
+**`collect_evidence`는 다섯 Assessment를 병합한다.** 기술 조사 근거도 레지스트리에 있어야
+참고문헌을 실제 인용에서 역으로 만들 수 있다(§8·§9).
 
 ### 에이전트 7종
 

@@ -22,7 +22,9 @@ Technology = Literal["TurboQuant", "ITME"]
 Kind = Literal["fact", "inference", "hypothesis"]
 Status = Literal["completed", "partial", "failed"]
 Collection = Literal["papers_core", "ecosystem", "context", "web"]
-Role = Literal["research", "maturity", "market", "stakeholder", "domain"]
+# 검색 관점 이름(R2 `perspectives`)과 맞춘다. State 필드는 domain_assessment 지만
+# 역할 이름은 domain 이다. synthesis 도 종합 단계에서 Gap 을 남긴다(설계서 §7).
+Role = Literal["research", "maturity", "market", "stakeholder", "domain", "synthesis"]
 
 
 class Source(BaseModel):
