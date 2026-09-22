@@ -9,6 +9,11 @@
 R1~R5가 각자 main에 들어왔지만 **파이프라인은 한 번도 끝까지 돈 적이 없다.**
 테스트 82개가 통과하는 이유는 각자 자기 함수를 손으로 만든 state로만 부르기 때문이다.
 
+> **진행 상황 (2026-09-22): Stage 1~7 모두 적용.** 118 tests.
+> `tests/test_integration_graph.py` 가 실물 노드로 그래프를 끝까지 돌린다
+> (검색·LLM·색인·PDF 렌더링만 fixture, `stakeholder` 는 stub).
+> 각 Stage 의 실제 작업은 계획보다 컸다 — 아래 「실제로 나온 것」 참고.
+
 ---
 
 ## 현상 요약
@@ -219,3 +224,28 @@ uv run python app.py --domain "..."                          # 실물 1회 (LLM 
 
 Stage 1·3은 죽거나 조용히 틀리는 버그라 먼저 간다. Stage 5는 §9 목차 해석이 들어가므로
 R5와 같이 본다.
+
+
+---
+
+## 실제로 나온 것 (계획과 다른 부분)
+
+계획은 "market만 구버전"이라고 봤지만, **테스트를 붙이자 드러난 게 더 많았다.**
+R4 테스트가 하나도 없었고 R5 테스트는 구버전 State 를 손으로 만들어 넣고 있었다.
+
+| Stage | 계획 | 실제 |
+|---|---|---|
+| 2 | market 하나 이행 | research·maturity·domain 도 Assessment 조립에서 ValidationError 로 죽고 있었다. `technology="both"`, 빈 `evidence_ids`, 가설에 explanation 없음, `allowed_uses=["domain_assessment"]`, maturity 가 쓰지도 않는 LLM 을 만들어 API 키를 요구 |
+| 3 | 입력 형식 교체 | `schema.Synthesis` 의 `conflicts: min_length=1` 과 `Conflict.favors` 가 설계서 §5 "상충하는 의견을 억지로 만들지는 않는다"와 어긋나 제거 |
+| 5 | §4 본문만 교체 | §9 목차표에 맞춰 근거 공백을 §5.3 → §6 으로 옮기고, §10 이 요구하는 조사 시점·검토 범위를 §6 에 추가 |
+| 7 | 배선만 | `collect_evidence` 가 정상 실행에서 병합 오류를 냈다. 같은 청크를 여러 노드가 인용하면 `allowed_uses` 만 달라지는데 이걸 내용 불일치로 봤다. 허용 용도는 원문 속성이 아니라 사용 권한이라 합집합으로 합친다 |
+
+## 남은 것
+
+- 실물 LLM·색인으로 한 번도 돌리지 않았다. `uv run python app.py` 는 R2 코퍼스와
+  API 키가 있어야 한다. §6 의 "기본 생성 단계는 기술 조사 1회, 관점 평가 4회, 종합 1회"
+  확인은 그때 한다.
+- `stakeholder` 는 통합 테스트에서 stub 이다. 네트워크·실행별 저장소를 쓰므로
+  `scripts/r3_smoke.py` 가 따로 검증한다.
+- 품질 점검(`quality_checks`)은 Markdown 문자열만 본다. §9 의 "표·그래프의 잘림"은
+  실제 PDF 렌더 결과를 봐야 알 수 있다.

@@ -26,7 +26,15 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from pydantic import ValidationError
 
+from src.agents.domain import domain_assessment
+from src.agents.market import market
+from src.agents.maturity import maturity
+from src.agents.report import report
+from src.agents.research import research
 from src.agents.stakeholder import stakeholder
+from src.agents.synthesis import synthesis
+from src.output.pdf import publish
+from src.output.review import review
 from src.schema import Assessment
 from src.state import ReportState, run_dir
 from src.tools.web_store import save_json, utcnow
@@ -63,6 +71,30 @@ def setup(state) -> dict:
             "trace": [event("setup", sources=len(manifest), run_id=state["run_id"])]}
 
 
+def _merge_one(store: dict, item: dict, id_field: str, node: str) -> list[str]:
+    """ID 하나를 레지스트리에 합친다. 같은 ID 에 다른 내용이 오면 병합 오류다(§7).
+
+    `allowed_uses` 만 예외로 합집합을 취한다. §7 은 ID 를 원문 URL·버전 또는 본문
+    해시·위치로 만들라고 한다 — 즉 같은 ID 면 같은 원문이다. 반면 허용 용도는 원문의
+    속성이 아니라 **사용 권한**이라, 같은 청크를 TRL 노드와 시장성 노드가 각각 인용하면
+    자기 역할만 적어 온다. 이걸 내용 불일치로 보면 정상 실행이 전부 병합 오류가 된다.
+    노드별 권한 검사는 각 Assessment 안에서 이미 끝났다(§8).
+    """
+    ident = item[id_field]
+    kept = store.get(ident)
+    if kept is None:
+        store[ident] = dict(item)
+        return []
+
+    without_uses = {k: v for k, v in item.items() if k != "allowed_uses"}
+    if {k: v for k, v in kept.items() if k != "allowed_uses"} != without_uses:
+        return [f"{node}: {ident} 가 기존 내용과 다르다"]
+
+    kept["allowed_uses"] = sorted({*(kept.get("allowed_uses") or []),
+                                   *(item.get("allowed_uses") or [])})
+    return []
+
+
 def collect_evidence(state) -> dict:
     """다섯 Assessment 의 출처와 근거를 한 번에 병합한다. **검증은 여기서 한 번만.**
 
@@ -83,9 +115,7 @@ def collect_evidence(state) -> dict:
         for key, store, id_field in (("sources", sources, "source_id"),
                                      ("evidence", evidence, "evidence_id")):
             for item in assessment[key]:
-                kept = store.setdefault(item[id_field], item)
-                if kept != item:
-                    errors.append(f"{name}: {item[id_field]} 가 기존 내용과 다르다")
+                errors.extend(_merge_one(store, item, id_field, name))
         gaps.extend(assessment["gaps"])
 
     if errors:
@@ -140,10 +170,8 @@ def fail(state) -> dict:
     return {"trace": [event("fail", "failed", errors=validation.get("errors", []))]}
 
 
-# ── 아직 새 계약으로 이행하지 않은 노드 ─────────────────────────────────────
-
 def _pending(name, owner):
-    """구버전 형식을 반환하는 노드. 실물 대신 세워 두고 mock 으로 갈아끼운다."""
+    """아직 새 계약으로 이행하지 않은 노드 자리. 실행하면 담당과 이유를 말하고 멈춘다."""
     def node(state):
         raise NotImplementedError(
             f"{name} 는 {owner} 가 schema.Assessment 계약으로 이행해야 한다. "
@@ -152,20 +180,20 @@ def _pending(name, owner):
 
 
 DEFAULT_NODES = {
-    "setup": setup,
-    "research": _pending("research", "R4"),
-    "maturity": _pending("maturity", "R4"),
-    "market": _pending("market", "R4"),
-    "stakeholder": stakeholder,          # R3 이행 완료
-    "domain_assessment": _pending("domain_assessment", "R4"),
-    "collect_evidence": collect_evidence,
-    "synthesis": _pending("synthesis", "R5"),
-    "review": _pending("review", "R5"),
-    "final_check": final_check,
-    "save_draft": save_draft,
-    "fail": fail,
-    "report": _pending("report", "R5"),
-    "publish": _pending("publish", "R5"),
+    "setup": setup,                      # R1
+    "research": research,                # R4
+    "maturity": maturity,                # R4
+    "market": market,                    # R4
+    "stakeholder": stakeholder,          # R3
+    "domain_assessment": domain_assessment,   # R4
+    "collect_evidence": collect_evidence,     # R1
+    "synthesis": synthesis,              # R5
+    "review": review,                    # R5 — 형식 검사 + 사람의 내용 검토
+    "final_check": final_check,          # R1
+    "save_draft": save_draft,            # R1
+    "fail": fail,                        # R1
+    "report": report,                    # R5
+    "publish": publish,                  # R5 — 레이아웃 확인 후 제출본 저장
 }
 
 

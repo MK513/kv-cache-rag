@@ -10,12 +10,12 @@
 | 계약 | 소유 | 소비 |
 |---|---|---|
 | ① State (§7 14행 / 17필드) + `src/schema.py` | R1 | 전원 |
-| ② ~~관점 dict `{text, citations, gaps}`~~ → `schema.Assessment` | R1 · R5 | R3 · R4 |
+| ② ~~관점 dict~~ — 삭제됨. `schema.Assessment` 가 대체한다 | — | — |
 | ③ chunk 스키마 + 검색 도구 시그니처 | R2 | R3 · R4 |
 | ④ `validation` · `review_status` | R5 | R1 (라우팅) |
 | ⑤ `sources.json` 의 `scope` · `perspectives` 값 | R2 (선별 R3) | R3 · R4 |
 
-①②③만 정해지면 **R3~R5는 인덱스 완성 전에도 목업 청크로 개발을 시작할 수 있다** (§6).
+①③만 정해지면 **R3~R5는 인덱스 완성 전에도 목업 청크로 개발을 시작할 수 있다** (§6).
 
 ---
 
@@ -102,44 +102,11 @@ review_status = "pending" | "passed"
 
 ---
 
-## ② 관점 dict — `src/agents/common.py` (R1 · R5) — **구버전**
+## ② 관점 dict — **삭제됨** (2026-09-22)
 
-> `schema.Assessment`가 대체한다(①). 평가 노드는 `{text, citations, gaps}`가 아니라
-> Assessment를 반환한다. 아래는 구버전 `report`·`validate` 경로를 읽기 위한 기록이다.
-
-다섯 평가 노드가 **모두 같은 모양**으로 반환한다.
-
-```python
-{
-  "text": str,              # 본문 마크다운
-  "citations": list[str],   # 실재하는 인용 ID (또는 url — stakeholder)
-  "gaps": list[str],        # 근거 공백
-  "bad_citations": list[str],  # 존재하지 않는 인용 ID — validate 가 읽는다
-}
-```
-
-`common.perspective(text, valid_ids)` 가 이 dict를 만들어 준다. 직접 조립하지 말 것.
-
-### 인용 ID 형식
-
-본문에 **`[` + 12자리 16진수 + `]`** 로 박는다. `common.extract_citations` 가
-정규식 `\[([0-9a-f]{12})\]` 로 뽑아 인덱스 실물과 대조한다.
-
-```
-TurboQuant 는 ... 로 보고한다 [a1b2c3d4e5f6].
-```
-
-`chunk_id = sha1(f"{source}|{page}|{text}")[:12]` — 재실행해도 값이 변하지 않는다.
-따라서 **청킹 파라미터를 바꾸면 인용 ID가 전부 달라진다.** 평가셋 라벨링은 청킹 확정 후에.
-
-### 근거 공백 표기
-
-LLM 출력의 마지막 줄을 `common.extract_gaps` 가 파싱한다. 프롬프트가 이 형식을 강제한다.
-
-```
-근거 공백: TurboQuant 처리량 미확인 | 결합 실측 자료 없음
-근거 공백: 없음
-```
+`{text, citations, gaps}` 는 더 이상 쓰지 않는다. 다섯 평가 노드가 모두
+`schema.Assessment` 를 반환한다(①, 설계서 §6). 마지막 소비자였던 `market` 이 이행하면서
+`src/agents/common.py` 의 `perspective()` 도 지웠다. 형식은 git 이력에 있다.
 
 ---
 

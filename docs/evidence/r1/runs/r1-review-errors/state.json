@@ -259,7 +259,6 @@
     "conflicts": [
       {
         "perspective": "TRL",
-        "favors": "판단보류",
         "why": "합성"
       }
     ],

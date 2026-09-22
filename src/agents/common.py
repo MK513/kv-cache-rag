@@ -45,9 +45,3 @@ def extract_gaps(text: str) -> list[str]:
     if not m or m.group(1).strip() in ("없음", "-"):
         return []
     return [g.strip() for g in m.group(1).split("|") if g.strip()]
-
-
-def perspective(text: str, valid_ids: set[str]) -> dict:
-    """관점 dict 공통 구조 {text, citations, gaps} + 검증용 bad_citations."""
-    cited, bad = extract_citations(text, valid_ids)
-    return {"text": text, "citations": cited, "gaps": extract_gaps(text), "bad_citations": bad}
