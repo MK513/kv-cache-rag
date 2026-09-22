@@ -12,6 +12,9 @@ retrieval:
 # 실행 단위 설정 — app.py 가 run_config 로 묶어 State 에 넣는다 (R1)
 run:
   runs_dir: runs              # runs/<run_id>/ 아래에 원문 스냅샷·결과·trace 를 남긴다
+  technologies:               # 설계서 §2 — 설정에 고정 등록해 모든 결과물에서 같은 비교 대상을 쓴다
+    - TurboQuant
+    - ITME
   web_top_k: 3                # 기술×주체별 웹 검색 후보 수
   web_context_chars: 40000    # 모델에 전달할 근거 XML 총 문자 수
   web:                        # 이해관계자 웹 수집 한도 (R3 계약)

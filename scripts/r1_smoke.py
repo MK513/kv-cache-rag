@@ -12,19 +12,20 @@ import json
 from pathlib import Path
 
 from app import finish, start_run
-from src.graph import MergeConflict, build_graph, resume_state
+from src.graph import MergeConflict, build_graph, invoke, resume_state
 from src.tools.web_store import save_json
 from tests import mock_nodes
 
 
 def initial(root, run_id):
     return {"run_id": run_id, "run_status": "running", "trace": [],
-            "run_config": {"domain": "데이터센터/클라우드 (합성 데이터)", "runs_dir": str(root)}}
+            "run_config": {"domain": "데이터센터/클라우드 (합성 데이터)", "runs_dir": str(root),
+                           "technologies": ["TurboQuant", "ITME"]}}
 
 
 def execute(state, *, start="setup", **mock_kw):
     start_run(state)
-    final = build_graph(start=start, **mock_nodes.all_nodes(**mock_kw)).invoke(state)
+    final = invoke(build_graph(start=start, **mock_nodes.all_nodes(**mock_kw)), state)
     return final, finish(final, final["run_status"])
 
 
@@ -37,8 +38,8 @@ def run(root):
 
     final, status = execute(initial(root, "r1-completed"))
     cases.append({"case": "completed", "passed": status == "completed",
-                  "run_status": status, "report": bool(final.get("report")),
-                  "sources": len(final["registry"]["sources"])})
+                  "run_status": status, "report_paths": final.get("report_paths", []),
+                  "sources": len(final["source_registry"]), "gaps": len(final["gaps"])})
 
     final, status = execute(initial(root, "r1-review-pending"), review_status="pending")
     draft = root / "r1-review-pending" / "draft.json"
@@ -47,8 +48,8 @@ def run(root):
 
     # 사람이 초안을 검토하고 review 를 고친 뒤 재개하는 경로.
     resumed = resume_state("r1-review-pending", root)
-    resumed["review"] = {"errors": [], "review_status": "passed", "round": 1}
-    final, status = execute(resumed, start="final_check")
+    resumed |= {"validation": {"errors": [], "reviewer": "합성 검토"}, "review_status": "passed"}
+    final, status = execute(resumed, start="review")
     cases.append({"case": "resume_after_review", "passed": status == "completed",
                   "run_status": status, "nodes": [t["node"] for t in final["trace"]]})
 

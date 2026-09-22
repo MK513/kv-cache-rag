@@ -1,13 +1,16 @@
-"""State 14필드 — 담당: R1 (설계서 §7)
+"""State — 담당: R1 (설계서 §7 표 그대로)
 
-**각 필드는 단독 쓰기 주체를 갖는다.** 병렬 fan-out 에서 두 노드가 같은 필드에 쓰면
-LangGraph 가 `InvalidUpdateError` 를 낸다. 누적 reducer 는 `trace` 하나뿐이다.
+§7 표는 14행이고 그중 세 행이 묶음 표기(`run_id / run_config`,
+`validation / review_status`, `report / report_paths`)다. Python 필드로 풀어 17개다.
 
-네 평가 노드는 `registry` 에 쓰지 않는다 — Source·Evidence 병합은 `collect_evidence`
-단독 책임이다. 그래서 동시 쓰기가 구조적으로 불가능하다.
+**병렬 구간에서는 각 평가 노드가 자기 결과 키만 쓴다.** 웹 자료는 전역에 쌓지 않고 각
+Assessment 에 넣는다. 네 결과가 모두 도착하면 `collect_evidence` 가 출처와 근거를 한 번에
+병합한다. 병렬 노드는 공용 gaps 나 레지스트리를 직접 수정하지 않는다.
 
-값은 전부 dict/list 다. 형식은 `src/schema.py` 가 정의하고 `collect_evidence` 가 한 번
-검증한다. 노드마다 model_validate 를 부르지 않는다.
+`trace` 만 append reducer 를 쓴다. `gaps` 는 합류 후 수집하고 종합 후 순차 병합한다 —
+병렬이 아니라 순서가 정해져 있어 reducer 가 필요 없다.
+
+값은 전부 dict/list 다. 형식은 `src/schema.py` 가 정의하고 `collect_evidence` 가 검증한다.
 """
 
 import operator
@@ -15,29 +18,31 @@ from typing import Annotated, TypedDict
 
 
 class ReportState(TypedDict, total=False):
-    # ── 실행 식별 · 설정 (app.py 초기화) ──
-    run_id: Annotated[str, "실행 식별자. 저장 루트 runs/<run_id>/ 와 웹 근거 소유자를 결정"]
-    run_config: Annotated[dict, "domain / runs_dir / web_top_k / web_context_chars / web{한도}"]
+    # ── 초기화 ──
+    run_id: Annotated[str, "실행 식별자. runs/<run_id>/ 아래에 원문 스냅샷·결과를 남긴다"]
+    run_config: Annotated[dict, "기술·모델·자료 버전·호출 한도. app.py 가 만들고 setup 이 자료 버전을 채운다"]
 
-    # ── 적재 ──
-    sources_manifest: Annotated[list[dict], "색인 매니페스트 — setup 단독 쓰기"]
+    # ── 기술 조사 + 병렬 평가: 각 노드가 자기 키에만 쓴다 ──
+    research: Annotated[dict, "Assessment — 기술 조사 결과와 근거"]
+    maturity: Annotated[dict, "Assessment — TRL 평가 결과"]
+    market: Annotated[dict, "Assessment — 시장성 평가 결과"]
+    stakeholder: Annotated[dict, "Assessment — 이해관계자 평가 결과"]
+    domain_assessment: Annotated[dict, "Assessment — 도메인 평가 결과"]
 
-    # ── 기술 조사 + 병렬 평가: 각 노드가 자기 필드에만 쓴다 (전부 Assessment) ──
-    research: Annotated[dict, "기술 조사 — papers_core"]
-    maturity: Annotated[dict, "TRL — papers_core"]
-    market: Annotated[dict, "시장성 — ecosystem"]
-    stakeholder: Annotated[dict, "이해관계자 — 웹 (R3)"]
-    domain_assessment: Annotated[dict, "도메인 적용 — papers_core + context"]
+    # ── 합류 ──
+    source_registry: Annotated[dict, "{source_id: Source} — collect_evidence. 서지정보와 저장 위치"]
+    evidence_registry: Annotated[dict, "{evidence_id: Evidence} — collect_evidence. 인용 구절과 원문 위치"]
+    gaps: Annotated[list[dict], "[Gap] — 합류 후 수집, 종합 후 순차 병합"]
 
-    # ── 병합 · 종합 · 검토 ──
-    registry: Annotated[dict, "{sources: {id: Source}, evidence: {id: Evidence}, gaps: [Gap]}"
-                              " — collect_evidence 단독 쓰기"]
-    synthesis: Annotated[dict, "일치/상충/gaps/결합가설 — synthesis 단독 쓰기"]
-    review: Annotated[dict, "{errors: [...], review_status, round} — 내용검토(R5) 단독 쓰기"]
+    # ── 종합 · 검증 ──
+    synthesis: Annotated[dict, "Synthesis — 일치·차이·가설과 주장별 근거 연결"]
+    validation: Annotated[dict, "검증 단계. 오류와 내용 검토 결과"]
+    review_status: Annotated[str, "검증 단계. pending 이면 검토용 초안만 저장한다"]
 
-    # ── 출력 ──
-    report: Annotated[str, "최종 Markdown — report 단독 쓰기"]
-    run_status: Annotated[str, "running | partial | completed | failed — final_check 판정"]
+    # ── 제어 · 출력 ──
+    run_status: Annotated[str, "제어 단계. running / partial / completed / failed"]
+    report: Annotated[str, "출력 단계. Markdown 본문"]
+    report_paths: Annotated[list[str], "출력 단계. Markdown·PDF 저장 경로"]
 
     # ── 누적 ──
     trace: Annotated[list[dict], operator.add]

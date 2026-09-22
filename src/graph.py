@@ -1,23 +1,28 @@
-"""그래프 배선 — 담당: R1 (설계서 §8)
+"""그래프 배선 — 담당: R1 (설계서 §8, 부록 A 그래프 소스 그대로)
 
-    START → setup → research → [maturity ‖ market ‖ stakeholder ‖ domain_assessment]
+    setup → research → [maturity ‖ market ‖ stakeholder ‖ domain_assessment]
           → collect_evidence → synthesis → review → final_check
-                                                       ├ 통과      → report    → END
-                                                       ├ 검토대기  → save_draft → END
-                                                       └ 미해결오류 → fail      → END
+                                             ↑            ├ 검토 대기  → save_draft ─┐
+                                             └────────────────────────────────────────┘
+                                                          ├ 미해결 오류 → fail  → END
+                                                          └ 통과       → report → publish → END
 
-**조건부 엣지는 `final_check` 하나뿐이다.** 근거 보완 재조사와 인용 수정 재작성은 노드
-내부 루프로 내린다(R3 `stakeholder` 가 이미 그렇게 한다). 그래프에 되돌아오는 엣지를 두면
-경로가 곱해져 4분기 재현이 불가능해진다.
+**재시도는 노드 내부의 최대 1회 처리다**(부록 A). 그래서 조건부 엣지는 `final_check`
+하나뿐이다. `final_check` 는 인용 오류와 사람의 내용 검토 완료 여부를 함께 확인한다.
 
-병합 오류는 네 번째 경로이고, 그래프 분기가 아니라 `collect_evidence` 의 예외다.
-근거가 서로 어긋난 채로 종합·검토에 LLM 을 태울 이유가 없다. `app.py` 가 받아서
-run_status=failed 로 기록한다.
+검토 대기는 초안을 저장하고 **내용 검토(`review`)로 되돌아간다.** 사람이 검토 결과를
+반영해야 진행되므로 `save_draft` 뒤에서 실행을 멈춘다(`interrupt_after`). 재개는 고친
+초안을 들고 `build_graph(start="review")` 로 다시 들어온다.
+
+병합 오류는 분기가 아니라 `collect_evidence` 의 예외다. 같은 ID 에 다른 내용이 들어오면
+어느 원문을 가리키는지 고를 근거가 없다(설계서 §7). 어긋난 근거로 종합·검토에 LLM 을
+태우지 않고 실행을 끝낸다.
 """
 
 import json
 from pathlib import Path
 
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from pydantic import ValidationError
 
@@ -27,10 +32,13 @@ from src.state import ReportState
 from src.tools.web_store import save_json, utcnow
 
 FANOUT = ["maturity", "market", "stakeholder", "domain_assessment"]
+# 합류 단계에서 모든 자료를 모은다(§6). 참고문헌을 실제 인용에서 역으로 만들려면
+# 기술 조사 단계의 근거도 레지스트리에 있어야 한다(§9).
+MERGED = ["research"] + FANOUT
 
 
 class MergeConflict(Exception):
-    """같은 ID 에 다른 내용이 왔다. 인용이 어느 원문을 가리키는지 알 수 없으므로 실행을 끝낸다."""
+    """같은 ID 에 다른 내용이 들어왔다. 인용이 어느 원문을 가리키는지 알 수 없어 실행을 끝낸다."""
 
 
 def run_dir(state) -> Path:
@@ -46,28 +54,29 @@ def event(node, status="ok", **fields) -> dict:
 # ── R1 소유 노드 ────────────────────────────────────────────────────────────
 
 def setup(state) -> dict:
-    """설정확인/적재. run_id·run_config 를 확인하고 색인 매니페스트를 State 에 넣는다."""
+    """설정 확인과 논문 적재. 적재한 자료 버전을 run_config 에 남긴다."""
     if not state.get("run_id"):
         raise ValueError("run_id 가 없다. app.py 가 실행마다 발급한다")
     config = state.get("run_config") or {}
-    if not config.get("domain"):
-        raise ValueError("run_config.domain 이 없다")
+    for key in ("domain", "technologies"):
+        if not config.get(key):
+            raise ValueError(f"run_config.{key} 가 없다")
     run_dir(state).mkdir(parents=True, exist_ok=True)
 
     from src.rag.index import build   # 임베딩을 끌고 오므로 호출 시점에 import 한다
     manifest = build()["manifest"]
-    return {"sources_manifest": manifest,
+    return {"run_config": config | {"sources": manifest},
             "trace": [event("setup", sources=len(manifest), run_id=state["run_id"])]}
 
 
 def collect_evidence(state) -> dict:
-    """네 Assessment 의 Source·Evidence 를 ID 기준으로 병합한다. **검증은 여기서 한 번만.**
+    """다섯 Assessment 의 출처와 근거를 한 번에 병합한다. **검증은 여기서 한 번만.**
 
-    같은 ID 에 다른 내용이 오면 병합 오류다. 어느 쪽이 맞는지 고를 근거가 없고,
-    조용히 덮어쓰면 R5 의 원문 대조가 엉뚱한 출처를 가리킨다.
+    같은 ID 에 다른 내용이 오면 병합 오류다(§7). 어느 쪽이 맞는지 고를 근거가 없고,
+    조용히 덮어쓰면 내용 검토가 엉뚱한 원문을 대조하게 된다.
     """
     sources, evidence, gaps, errors = {}, {}, [], []
-    for name in FANOUT:
+    for name in MERGED:
         raw = state.get(name)
         if not raw:
             errors.append(f"{name}: Assessment 가 없다")
@@ -89,52 +98,58 @@ def collect_evidence(state) -> dict:
         save_json(run_dir(state) / "merge-errors.json", {"errors": errors})
         raise MergeConflict("; ".join(errors))
 
-    # ponytail: research 의 Assessment 는 병합하지 않는다(설계서 §8 은 fan-out 4개만 센다).
-    #           research 인용을 R5 가 역참조해야 하면 FANOUT 앞에 "research" 를 붙인다.
-    return {"registry": {"sources": sources, "evidence": evidence, "gaps": gaps},
+    return {"source_registry": sources, "evidence_registry": evidence, "gaps": gaps,
             "trace": [event("collect_evidence", sources=len(sources),
                             evidence=len(evidence), gaps=len(gaps))]}
 
 
 def final_check(state) -> dict:
-    """run_status 를 판정한다. 라우팅은 이 값과 review 만 본다."""
-    statuses = {state.get(name, {}).get("status") for name in FANOUT}
-    review = state.get("review") or {}
-    if "failed" in statuses or review.get("errors"):
-        status = "failed"
-    elif review.get("review_status") == "pending" or "partial" in statuses:
-        status = "partial"      # 근거 공백이 있어도 보고서는 낸다. 검토 대기만 초안으로 멈춘다.
+    """인용 오류와 사람의 내용 검토 완료 여부를 함께 확인하고 run_status 를 판정한다(부록 A)."""
+    statuses = {state.get(name, {}).get("status") for name in MERGED}
+    errors = (state.get("validation") or {}).get("errors")
+    if "failed" in statuses or errors:
+        status = "failed"          # 구조 오류나 미해결 인용 오류가 남은 경우(§7)
+    elif state.get("review_status") == "pending" or "partial" in statuses:
+        status = "partial"         # 일부 항목을 평가 보류로 남겼거나 내용 검토가 끝나지 않았다
     else:
         status = "completed"
     return {"run_status": status,
-            "trace": [event("final_check", status, review=review.get("review_status", ""))]}
+            "trace": [event("final_check", status, review_status=state.get("review_status", ""))]}
 
 
 def route_after_final(state) -> str:
     if state["run_status"] == "failed":
         return "fail"
-    if (state.get("review") or {}).get("review_status") == "pending":
+    if state.get("review_status") == "pending":
         return "save_draft"
     return "report"
 
 
 def save_draft(state) -> dict:
-    """검토 대기. State 를 통째로 남기고 멈춘다. 같은 run_id 로 `app.py --resume` 하면 재개한다."""
+    """검토용 초안만 저장한다(§7). 제출본과 다른 경로에 둔다(§8).
+
+    다음 엣지는 `review` 로 돌아가지만 사람의 검토 결과가 있어야 진행되므로
+    여기서 실행이 멈춘다(`interrupt_after`). 재개는 `app.py --resume <run_id>`.
+    """
     draft = {k: v for k, v in state.items() if k != "trace"}
     save_json(run_dir(state) / "draft.json", draft)
     return {"trace": [event("save_draft", "partial", path=str(run_dir(state) / "draft.json"))]}
 
 
 def fail(state) -> dict:
-    """미해결 오류. report 를 쓰지 않는다 — 실패한 실행이 보고서 자리를 차지하면 안 된다."""
-    errors = (state.get("review") or {}).get("errors", [])
-    return {"trace": [event("fail", "failed", errors=errors)]}
+    """미해결 오류. 오류와 로그를 저장하고 제출용 출력을 막는다(§8).
+
+    `report` 를 쓰지 않는다 — 실패한 실행이 보고서 자리를 차지하면 안 된다.
+    """
+    validation = state.get("validation") or {}
+    save_json(run_dir(state) / "validation-errors.json", validation)
+    return {"trace": [event("fail", "failed", errors=validation.get("errors", []))]}
 
 
 # ── 아직 새 계약으로 이행하지 않은 노드 ─────────────────────────────────────
 
 def _pending(name, owner):
-    """구버전 관점 dict 를 반환하는 노드. 실물 대신 세워 두고 mock 으로 갈아끼운다."""
+    """구버전 형식을 반환하는 노드. 실물 대신 세워 두고 mock 으로 갈아끼운다."""
     def node(state):
         raise NotImplementedError(
             f"{name} 는 {owner} 가 schema.Assessment 계약으로 이행해야 한다. "
@@ -156,14 +171,15 @@ DEFAULT_NODES = {
     "save_draft": save_draft,
     "fail": fail,
     "report": _pending("report", "R5"),
+    "publish": _pending("publish", "R5"),
 }
 
 
 def build_graph(start="setup", **overrides):
     """노드 함수를 이름으로 갈아끼운다. R4·R5 이행 전에는 mock 을 주입해 전 경로를 돌린다.
 
-    `start="final_check"` 는 재개용이다. 사람이 draft.json 의 `review` 를 고쳐 놓았으므로
-    평가·종합을 다시 돌리지 않는다 — checkpointer 없이 재개 비용을 없애는 방법이다.
+    `start="review"` 는 재개용이다(부록 A 의 `검토 결과 반영 후 재개`). 사람이 draft.json 의
+    검토 결과를 반영해 두었으므로 평가·종합을 다시 돌리지 않고 내용 검토부터 이어 간다.
     """
     nodes = DEFAULT_NODES | overrides
     b = StateGraph(ReportState)
@@ -174,22 +190,31 @@ def build_graph(start="setup", **overrides):
     b.add_edge("setup", "research")
     for name in FANOUT:
         b.add_edge("research", name)          # fan-out
-    b.add_edge(FANOUT, "collect_evidence")    # 넷이 모두 끝나야 합류
+    b.add_edge(FANOUT, "collect_evidence")    # 넷이 모두 끝나야 병합·종합을 시작한다(§8)
     b.add_edge("collect_evidence", "synthesis")
     b.add_edge("synthesis", "review")
     b.add_edge("review", "final_check")
     b.add_conditional_edges("final_check", route_after_final,
                             ["report", "save_draft", "fail"])
-    for name in ("report", "save_draft", "fail"):
-        b.add_edge(name, END)
-    return b.compile()
+    b.add_edge("save_draft", "review")        # 검토 결과 반영 후 재개(부록 A)
+    b.add_edge("report", "publish")
+    b.add_edge("publish", END)
+    b.add_edge("fail", END)
+    # save_draft 뒤에서 멈춘다. 사람의 검토 없이 review 로 돌아가면 무한히 돈다.
+    return b.compile(checkpointer=InMemorySaver(), interrupt_after=["save_draft"])
+
+
+def invoke(graph, state):
+    """checkpointer 를 붙였으므로 thread_id 가 필요하다. 실행 하나가 스레드 하나다."""
+    thread = state.get("run_id") or "unknown"
+    return graph.invoke(state, config={"configurable": {"thread_id": thread}})
 
 
 def resume_state(run_id, runs_dir="runs") -> dict:
     """save_draft 가 남긴 초안을 초기 State 로 되돌린다.
 
-    사람은 이 draft.json 의 `review` 를 직접 고쳐 검토 결과를 넣는다
-    (`review_status: "passed"` 또는 `errors` 추가). 그게 재개의 입력이다.
+    사람은 이 draft.json 의 `validation` · `review_status` 를 직접 고쳐 검토 결과를 넣는다.
+    그게 재개의 입력이다. `review_status` 가 pending 이면 다시 초안 저장에서 멈춘다.
     """
     draft = json.loads((Path(runs_dir) / run_id / "draft.json").read_text(encoding="utf-8"))
     return draft | {"trace": []}

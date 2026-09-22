@@ -5,8 +5,11 @@
       "case": "completed",
       "passed": true,
       "run_status": "completed",
-      "report": true,
-      "sources": 1
+      "report_paths": [
+        "docs/evidence/r1/runs/r1-completed/report.md"
+      ],
+      "sources": 1,
+      "gaps": 1
     },
     {
       "case": "review_pending",
@@ -20,8 +23,10 @@
       "passed": true,
       "run_status": "completed",
       "nodes": [
+        "review",
         "final_check",
-        "report"
+        "report",
+        "publish"
       ]
     },
     {
