@@ -1,0 +1,42 @@
+{
+  "synthetic_only": true,
+  "cases": [
+    {
+      "case": "completed",
+      "passed": true,
+      "run_status": "completed",
+      "report": true,
+      "sources": 1
+    },
+    {
+      "case": "review_pending",
+      "passed": true,
+      "run_status": "partial",
+      "draft": true,
+      "report": false
+    },
+    {
+      "case": "resume_after_review",
+      "passed": true,
+      "run_status": "completed",
+      "nodes": [
+        "final_check",
+        "report"
+      ]
+    },
+    {
+      "case": "unresolved_errors",
+      "passed": true,
+      "run_status": "failed",
+      "report": false
+    },
+    {
+      "case": "merge_conflict",
+      "passed": true,
+      "run_status": "failed",
+      "errors": [
+        "market: e-web-mock-1 가 기존 내용과 다르다"
+      ]
+    }
+  ]
+}
