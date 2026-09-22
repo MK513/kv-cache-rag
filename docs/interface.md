@@ -9,8 +9,8 @@
 
 | 계약 | 소유 | 소비 |
 |---|---|---|
-| ① State 17키 | R1 | 전원 |
-| ② 관점 dict `{text, citations, gaps}` | R1 · R5 | R3 · R4 |
+| ① State 14필드 + `src/schema.py` | R1 | 전원 |
+| ② ~~관점 dict `{text, citations, gaps}`~~ → `schema.Assessment` | R1 · R5 | R3 · R4 |
 | ③ chunk 스키마 + 검색 도구 시그니처 | R2 | R3 · R4 |
 | ④ `validation_errors` | R5 | R1 (라우팅) |
 | ⑤ `sources.json` 의 `scope` · `perspectives` 값 | R2 (선별 R3) | R3 · R4 |
@@ -19,50 +19,81 @@
 
 ---
 
-## ① State 17키 — `src/state.py` (R1)
+## ① State 14필드 + 공용 schema — `src/state.py` · `src/schema.py` (R1)
 
-`TypedDict(total=False)`. **각 키는 단독 쓰기 주체를 갖는다.** 병렬 fan-out에서 공통 키에
-두 노드가 쓰면 LangGraph가 `InvalidUpdateError`를 낸다. 누적 reducer는 `trace` 하나뿐이다.
+> **2026-09-22 R1 변경 (브랜치 `feat/r1-graph-state-schema`).** 구버전 17키를 교체한다.
+> 아래 표가 현행이다. 구버전 표는 git 이력에 있다.
 
-| 키 | 형식 | 단독 쓰기 주체 |
-|---|---|---|
-| `domain` | `str` | 입력 (`app.py`) |
-| `sources` | `list[dict]` | `app.py` ← `data/manifest.json` |
-| `web_sources` | `list[dict]` | `stakeholder` |
-| `evidence` | `list[dict]` | **`research` 만** |
-| `research` | `dict` (관점 dict) | `research` |
-| `tech_status` | `dict[str, str]` | `research` |
-| `gaps` | `list[str]` | `research` |
-| `retrieval_round` | `int` | `research` |
-| `maturity` | `dict` (관점 dict) | `maturity` |
-| `market` | `dict` (관점 dict) | `market` |
-| `stakeholder` | `dict` (관점 dict) | `stakeholder` |
-| `domain_assessment` | `dict` (관점 dict) | `domain_assessment` |
-| `synthesis` | `dict` | `synthesis` |
-| `validation_errors` | `list[dict]` | **`output/validate.py` 만** |
-| `validation_round` | `int` | **`output/validate.py` 만** |
-| `report` | `str` | `report` 또는 `abort` |
-| `trace` | `Annotated[list[dict], operator.add]` | 전 노드 (누적) |
+`TypedDict(total=False)`. **각 필드는 단독 쓰기 주체를 갖는다.** 병렬 fan-out에서 공통
+필드에 두 노드가 쓰면 LangGraph가 `InvalidUpdateError`를 낸다. 누적 reducer는 `trace` 하나뿐.
 
-```python
-tech_status = {"TurboQuant": "ok", "ITME": "평가 보류"}
-```
-
-`evidence` 단일 쓰기 주체 원칙 — `maturity`·`domain_assessment`도 인덱스를 조회하지만
-`evidence`에 쓰지 않고 자기 키에만 반영한다. 동시 쓰기가 구조적으로 불가능해진다.
-
-### trace 한 줄 형식
+| # | 필드 | 형식 | 단독 쓰기 주체 |
+|---|---|---|---|
+| 1 | `run_id` | `str` | `app.py` (초기화) |
+| 2 | `run_config` | `dict` | `app.py` |
+| 3 | `sources_manifest` | `list[dict]` | `setup` |
+| 4 | `research` | `dict` (Assessment) | `research` |
+| 5 | `maturity` | `dict` (Assessment) | `maturity` |
+| 6 | `market` | `dict` (Assessment) | `market` |
+| 7 | `stakeholder` | `dict` (Assessment) | `stakeholder` |
+| 8 | `domain_assessment` | `dict` (Assessment) | `domain_assessment` |
+| 9 | `registry` | `dict` | **`collect_evidence` 만** |
+| 10 | `synthesis` | `dict` (Synthesis) | `synthesis` |
+| 11 | `review` | `dict` | **내용검토(R5) 만** |
+| 12 | `report` | `str` | `report` |
+| 13 | `run_status` | `str` | `final_check` · `app.py` |
+| 14 | `trace` | `Annotated[list[dict], operator.add]` | 전 노드 (누적) |
 
 ```python
-{"node": "maturity", "chunks": 14}          # 노드가 남기는 기록
-{"tool": "query_kw", "ko": "...", "en": "..."}   # 도구가 남기는 기록
+run_config = {"domain": "데이터센터/클라우드", "runs_dir": "runs",
+              "web_top_k": 3, "web_context_chars": 40000,
+              "web": {"max_sources": 24, "max_searches": 16}}   # R3 계약의 한도 표
+
+registry = {"sources": {source_id: Source}, "evidence": {evidence_id: Evidence},
+            "gaps": [Gap, ...]}
+
+review = {"errors": [...], "review_status": "pending|passed", "round": 1}
 ```
 
-`node` 또는 `tool` 키 하나는 반드시 넣는다. 나머지 필드는 자유.
+**단일 쓰기 주체 원칙** — 네 평가 노드는 인덱스·웹을 각자 조회하지만 `registry`에 쓰지
+않는다. 자기 Assessment 안에만 Source·Evidence를 담고, 병합은 `collect_evidence`가 한다.
+동시 쓰기가 구조적으로 불가능해진다.
+
+**재시도 횟수는 별도 필드가 아니다.** 근거 보완 횟수는 각 노드 내부, 재작성 횟수는
+`review["round"]`에 둔다. 14필드를 넘기지 않기 위한 선택이다.
+
+### 공용 모델 — `src/schema.py`
+
+`Claim` / `Assessment` / `Source` / `Evidence` / `Gap` / `Synthesis` / `Conflict` / `Event`.
+필드는 R3 실물 출력(`src/tools/web_store.py`, `src/agents/stakeholder.py`)에서 역산했다.
+
+- **검증은 dict 경계에서 한 번만.** `collect_evidence`가 `Assessment.model_validate`를
+  부르고, 그 뒤로는 State를 dict로 흐른다. 노드마다 검증하지 않는다.
+- `Assessment`가 **인용 사슬**을 본다 — claim → evidence → source가 자기 안에서 닫히는지,
+  `status=failed`인데 claims가 남았는지. 병합이 믿을 근거는 이것뿐이다.
+- `Source`·`Evidence`는 `extra="allow"`. 웹 출처(R3)와 색인 출처(R2)는 필드가 다르다.
+  필수는 `source_id` · `run_id` · `collection` · `allowed_uses` 넷.
+- `Claim`·`Gap`·`Assessment`는 `extra="forbid"`. 오타난 필드가 조용히 통과하면 안 된다.
+- `Gap.item`은 자유 문자열이다. 이해관계자는 `competitors` 같은 4값이지만 maturity는
+  "TRL 6 실증 환경 근거" 식이라 Literal로 묶을 수 없다.
+- **R5 조치:** `src/agents/synthesis.py`의 `Synthesis`·`Conflict` 정의를 지우고
+  `src/schema.py`에서 import한다. 같은 정의를 두 벌 두지 않는다.
+
+### trace 한 줄 형식 — `schema.Event`
+
+```python
+{"node": "maturity", "status": "ok", "attempt": 1, "timestamp": "...", "chunks": 14}
+{"tool": "search_market_signals", "node": "stakeholder", "status": "ok", ...}
+```
+
+`node` 또는 `tool` 중 하나는 반드시 넣는다. 나머지 필드는 자유(`extra="allow"`).
 
 ---
 
-## ② 관점 dict — `src/agents/common.py` (R1 · R5)
+## ② 관점 dict — `src/agents/common.py` (R1 · R5) — **구버전**
+
+> `schema.Assessment`가 대체한다(①). 평가 노드는 `{text, citations, gaps}`가 아니라
+> Assessment를 반환한다. 아래는 구버전 `report`·`validate` 경로를 읽기 위한 기록이다.
 
 다섯 평가 노드가 **모두 같은 모양**으로 반환한다.
 
