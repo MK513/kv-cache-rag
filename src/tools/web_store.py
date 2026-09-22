@@ -17,6 +17,19 @@ def digest(value):
     return hashlib.sha256(value if isinstance(value, bytes) else value.encode()).hexdigest()
 
 
+ID_CHARS = 12
+
+
+def short_id(prefix, value):
+    """모델이 그대로 옮겨 적어야 하는 ID 다. 짧을수록 전사 오류가 준다.
+
+    sha256 64자를 그대로 쓰면 LLM 이 끝 글자를 흘려 인용 검증이 실패한다. 실제로
+    그 이유로 실행이 failed 로 끝난 적이 있다. 색인 쪽 chunk_id(계약 ③)도 12자다.
+    해시 원문은 sha256 필드에 그대로 남으므로 무결성 검증은 영향받지 않는다.
+    """
+    return f'{prefix}{digest(value)[:ID_CHARS]}'
+
+
 def save_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -167,7 +180,7 @@ class WebEvidenceStore:
                 if usage['body_chars'] + len(body) > self.limits['max_total_chars']:
                     raise ValueError('total body budget exceeded')
                 raw_hash, body_hash = digest(page.content), digest(body)
-                source_id = 'web-' + digest(f'{final_url}|{raw_hash}')
+                source_id = short_id('web-', f'{final_url}|{raw_hash}')
                 snapshot_dir = self.directory / 'snapshots'
                 snapshot_dir.mkdir(exist_ok=True)
                 extension = '.pdf' if extracted['media_type'] == 'application/pdf' else '.html'
@@ -188,7 +201,7 @@ class WebEvidenceStore:
                     for offset in range(0, len(paragraph), 2000):
                         quote = paragraph[offset:offset + 2000]
                         loc = f'{location}:chars:{offset}-{offset + len(quote)}'
-                        eid = 'e-web-' + digest(f'{source_id}|{loc}|{quote}')
+                        eid = short_id('e-web-', f'{source_id}|{loc}|{quote}')
                         evidence.append(dict(evidence_id=eid, source_id=source_id, run_id=self.run_id,
                             collection='web', quote=quote, location=loc, allowed_uses=['stakeholder'],
                             snapshot_path=str(snapshot), sha256=raw_hash))
@@ -198,7 +211,12 @@ class WebEvidenceStore:
                 else:
                     self.manifest['sources'][source_id] = source
                     usage['body_chars'] += len(body)
-                self.manifest['evidence'].update({e['evidence_id']: e for e in evidence})
+                registry = self.manifest['evidence']
+                for item in evidence:
+                    kept = registry.get(item['evidence_id'])
+                    if kept is not None and kept != item:
+                        raise ValueError('evidence ID collision; raise ID_CHARS')
+                    registry[item['evidence_id']] = item
                 result = dict(status='ok', requested_url=url, final_url=final_url, body=body,
                     quote='\n\n'.join(e['quote'] for e in evidence), source=source, evidence=evidence,
                     title=source['title'], institution=source['institution'], published_at=source['published_at'],

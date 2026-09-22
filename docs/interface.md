@@ -303,6 +303,18 @@ R2가 공급하는 `build()` 결과는 `stores[collection]["dense"]`(LangChain F
   본문, 인용 구절, 위치, raw/body 저장 경로 및 SHA-256, source/evidence를 반환한다.
   실패는 status="failed", error를 반환하고 source/evidence를 만들지 않는다.
   날짜 미확인은 null이며 조회일로 대체하지 않는다. 리다이렉트와 본문 한도를 검사한다.
+- ID 형식: `source_id = "web-" + sha256(final_url|raw_hash)[:12]`,
+  `evidence_id = "e-web-" + sha256(source_id|location|quote)[:12]`. **모델이 그대로 옮겨
+  적어야 하는 값이라 12자로 줄였다**(계약 ③의 `chunk_id` 와 같은 길이). 64자 전체를 쓰던
+  구버전에서는 모델이 끝 글자를 흘려 인용 검증이 실패하고 실행이 failed 로 끝났다.
+  원문 해시는 `sha256` 필드에 전체가 남으므로 무결성 검증은 영향받지 않는다.
+  같은 ID 에 다른 내용이 등록되면 즉시 실패한다(`ID_CHARS` 를 올려야 한다는 신호다).
+- 본문 추출은 렌더 실패·쿠키 안내 같은 상용구 문단을 버린다. 남기면
+  "There was an error while loading." 이 그대로 인용 가능한 Evidence 가 된다.
+  상용구를 버린 뒤 `min_body_chars` 에 미달하면 그 자료는 실패로 남는다.
+- 인용 검증 실패는 거부된 ID 마다 이유를 돌려준다 — 오타(정확한 ID 제시)·다른 기술로
+  수집된 자료·모델 입력에서 제외된 근거·존재하지 않는 ID. 수정 기회가 1회뿐이라
+  이유를 구분해 주지 않으면 그 1회를 그냥 날린다.
 - 저장: web/manifest.json, web/events.jsonl, web/search/*.json, web/snapshots/*.
   운영 스냅샷은 Git에 넣지 않는다. 증빙은 별도의 합성 데이터 실행으로 만든다.
 

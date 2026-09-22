@@ -187,3 +187,49 @@ def test_draft_gap_triggers_one_supplement_even_when_generic_body_was_fetched(tm
     assert len(queries) == 16
     assert sum(t.get('action') == 'supplement_search' for t in out['trace']) == 8
     assert out['stakeholder']['status'] == 'partial'
+
+
+def test_repair_feedback_names_the_reason_for_each_rejected_id():
+    """거부 사유를 구분해 알려야 수정 1회를 제대로 쓴다."""
+    from src.agents.stakeholder import _diagnose
+
+    allowed = {'TurboQuant': {'e-web-aaaaaaaaaaaa'}, 'ITME': {'e-web-bbbbbbbbbbbb'}}
+    visible = {'e-web-aaaaaaaaaaaa', 'e-web-bbbbbbbbbbbb', 'e-web-cccccccccccc'}
+    everything = {eid: {} for eid in visible}
+
+    text = _diagnose({'e-web-bbbbbbbbbbbb'}, 'TurboQuant', allowed, visible, everything)
+    assert 'ITME 자료로 수집됐다' in text
+
+    text = _diagnose({'e-web-aaaaaaaaaaa'}, 'TurboQuant', allowed, visible, everything)
+    assert '잘못 옮겨 적었다' in text and 'e-web-aaaaaaaaaaaa' in text
+
+    text = _diagnose({'e-web-zzzzzzzzzzzz'}, 'TurboQuant', allowed, visible, everything)
+    assert '이번 실행에 없는 ID' in text
+
+    text = _diagnose({'e-web-dddddddddddd'}, 'TurboQuant', allowed, visible,
+                     dict(everything, **{'e-web-dddddddddddd': {}}))
+    assert '모델 입력에서 제외된' in text
+
+
+def test_web_ids_are_short_enough_to_copy():
+    """설계 이유: 64자 hex 를 모델이 옮겨 적다 끝 글자를 흘려 실행이 실패했다."""
+    from src.tools.web_store import ID_CHARS, short_id
+
+    assert ID_CHARS == 12
+    assert len(short_id('e-web-', 'x')) == len('e-web-') + 12
+
+
+def test_error_boilerplate_never_becomes_evidence():
+    """로딩 실패 문구가 인용 가능한 원문이 되면 안 된다."""
+    from src.tools.web_fetch import FetchedPage, extract_body
+
+    html = (b'<html><head><title>Discussion</title></head><body><article>'
+            b'<p>Uh oh! There was an error while loading. Please reload this page.</p>'
+            b'<p>' + b'A real paragraph with enough substance to be quoted. ' * 4 + b'</p>'
+            b'</article></body></html>')
+    page = FetchedPage(url='https://example.org/d', status_code=200,
+                       headers={'content-type': 'text/html'}, content=html)
+
+    texts = [text for _, text in extract_body(page)['paragraphs']]
+    assert not any('error while loading' in text.lower() for text in texts)
+    assert any('real paragraph' in text for text in texts)
