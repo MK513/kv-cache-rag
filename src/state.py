@@ -14,6 +14,7 @@ Assessment 에 넣는다. 네 결과가 모두 도착하면 `collect_evidence` �
 """
 
 import operator
+from pathlib import Path
 from typing import Annotated, TypedDict
 
 
@@ -46,3 +47,13 @@ class ReportState(TypedDict, total=False):
 
     # ── 누적 ──
     trace: Annotated[list[dict], operator.add]
+
+
+def run_dir(state) -> Path:
+    """실행 저장 루트 `runs/<run_id>/`. R3 의 웹 스냅샷도 이 아래에 쌓인다.
+
+    State 에서 바로 나오는 값이라 여기 둔다. graph 에 두면 노드가 graph 를 import 하게 돼
+    순환이 생긴다.
+    """
+    config = state.get("run_config") or {}
+    return Path(config.get("runs_dir", "runs")) / state["run_id"]

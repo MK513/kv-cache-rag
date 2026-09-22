@@ -28,7 +28,7 @@ from pydantic import ValidationError
 
 from src.agents.stakeholder import stakeholder
 from src.schema import Assessment
-from src.state import ReportState
+from src.state import ReportState, run_dir
 from src.tools.web_store import save_json, utcnow
 
 FANOUT = ["maturity", "market", "stakeholder", "domain_assessment"]
@@ -39,12 +39,6 @@ MERGED = ["research"] + FANOUT
 
 class MergeConflict(Exception):
     """같은 ID 에 다른 내용이 들어왔다. 인용이 어느 원문을 가리키는지 알 수 없어 실행을 끝낸다."""
-
-
-def run_dir(state) -> Path:
-    """실행 저장 루트. R3 의 웹 스냅샷도 이 아래(runs/<run_id>/web/)에 쌓인다."""
-    config = state.get("run_config") or {}
-    return Path(config.get("runs_dir", "runs")) / state["run_id"]
 
 
 def event(node, status="ok", **fields) -> dict:

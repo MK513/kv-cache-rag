@@ -20,6 +20,9 @@ review_result와 reviewer는 사람이 직접 입력한다.
 import csv
 from pathlib import Path
 
+from src.output import validate
+from src.state import run_dir
+
 
 REVIEW_NODES = [
     "research",
@@ -172,3 +175,96 @@ def write_review_csv(state: dict, output_path: str | Path) -> Path:
         writer.writerows(rows)
 
     return output_path
+
+APPROVED = {"확인", "통과", "승인", "ok", "pass", "approved"}
+REJECTED = {"부결", "반려", "reject", "rejected", "fail"}
+
+
+def read_verdicts(path: str | Path) -> dict[str, dict]:
+    """사람이 채운 worksheet 에서 claim_id 별 판정을 읽는다.
+
+    한 Claim 에 근거가 여러 개면 row 도 여러 개다. 먼저 채워진 판정을 그 Claim 의
+    판정으로 본다. 빈 칸은 미판정이며 자동 통과시키지 않는다(§8).
+    """
+    path = Path(path)
+    if not path.exists():
+        return {}
+
+    verdicts: dict[str, dict] = {}
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            claim_id = (row.get("claim_id") or "").strip()
+            result = (row.get("review_result") or "").strip()
+            if not claim_id or not result or claim_id in verdicts:
+                continue
+            lowered = result.lower()
+            verdicts[claim_id] = {
+                "result": result,
+                "verdict": "확인" if lowered in APPROVED else
+                           "부결" if lowered in REJECTED else "미상",
+                "reviewer": (row.get("reviewer") or "").strip(),
+                "comment": (row.get("review_comment") or "").strip(),
+            }
+    return verdicts
+
+
+def _claim_ids(state: dict) -> set[str]:
+    return {
+        claim.get("claim_id")
+        for node_name in REVIEW_NODES
+        for claim in (state.get(node_name) or {}).get("claims") or []
+        if claim.get("claim_id")
+    }
+
+
+def review(state) -> dict:
+    """출처 대조와 내용 검토 (설계서 §8, 부록 A 의 `R` 노드).
+
+    프로그램 형식 검사와 사람의 내용 검토가 한 노드다. 형식 검사는 `validate.check` 가
+    하고, 내용 검토는 worksheet 를 통해 사람이 한다. **ID 대조만으로 자동 통과시키지
+    않는다** — 판정이 하나라도 비어 있으면 `review_status="pending"` 이고 그래프는
+    검토용 초안을 저장한 뒤 멈춘다.
+    """
+    checked = validate.check(state)
+    validation = dict(checked["validation"])
+
+    path = run_dir(state) / "review.csv"
+    if not path.exists():
+        # ponytail: 초안이 재작성되면 worksheet 가 낡는다. 판정을 지우지 않으려고
+        #           덮어쓰지 않는다. 재작성이 잦아지면 claim_id 기준 병합으로 바꾼다.
+        write_review_csv(state, path)
+
+    verdicts = read_verdicts(path)
+    claim_ids = _claim_ids(state)
+    pending = sorted(claim_ids - set(verdicts))
+    rejected = sorted(cid for cid, v in verdicts.items() if v["verdict"] == "부결")
+    unclear = sorted(cid for cid, v in verdicts.items() if v["verdict"] == "미상")
+
+    validation |= {
+        "review_csv": str(path),
+        "claim_verdicts": verdicts,
+        "pending_claims": pending,
+        # §8 — 근거를 확보하지 못한 주장은 사실 서술에서 제외한다. report 가 이 목록을 뺀다.
+        "rejected_claims": rejected,
+        "reviewers": sorted({v["reviewer"] for v in verdicts.values() if v["reviewer"]}),
+    }
+    if unclear:
+        validation["errors"] = list(validation.get("errors") or []) + [
+            {"node": "review", "claim_id": cid, "kind": "판정 값 미상", "ids": []}
+            for cid in unclear
+        ]
+
+    status = "passed" if claim_ids and not pending else "pending"
+    return {
+        "validation": validation,
+        "review_status": status,
+        "trace": [{
+            "node": "review",
+            "status": status,
+            "attempt": 1,
+            "claims": len(claim_ids),
+            "pending": len(pending),
+            "rejected": len(rejected),
+            "errors": len(validation.get("errors") or []),
+        }],
+    }
