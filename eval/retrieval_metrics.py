@@ -4,6 +4,8 @@
 언어별(ko/en) × 모드별(dense/rrf)로 분리 측정하고, 같은 사실(fact)의 한/영 질의가
 모두 top_k 내에 회수된 비율인 '완전 회수율(Full Recovery Rate)'을 산출합니다.
 
+팀 인터페이스 계약(§③ chunk 스키마 및 검색 파라미터 규약)을 준수합니다.
+
 실행 방법:
     uv run python -m eval.retrieval_metrics
 """
@@ -28,28 +30,74 @@ GOLDEN = Path("eval/goldenset.json")
 OUTPUT_JSON = Path("eval/retrieval_results.json")
 KS = (1, 3, 5)
 MIN_N = 12  # 서브셋당 표본 수가 이보다 적으면 경향성 경고 표시
-MODES = ("dense",)  # 단일 튜플 유지 (콤마 필수)
+MODES = ("dense", "rrf")
+
+
+def retrieve_chunks(item: Dict[str, Any], mode: str) -> List[Dict[str, Any]]:
+    """모드별(dense/rrf) 저수준 RAG 검색 수행.
+
+    인터페이스 계약 §③의 파라미터 규약 준수:
+    - query: 한국어/영어 질의
+    - collection: papers_core (필수값)
+    - technology: TurboQuant | ITME | both
+    - top_k: int
+    - perspective: research | maturity | market | domain | stakeholder
+    """
+    technology = item.get("technology", "both")
+    perspective = item.get("perspective", "research")
+    top_k = max(KS)
+
+    try:
+        # 모드 분기(dense vs rrf)를 지원하는 저수준 search 호출
+        return search(
+            query=item["question"],
+            collection="papers_core",
+            technology=technology,
+            top_k=top_k,
+            mode=mode,
+            perspective=perspective,
+        )
+    except TypeError:
+        # search()가 mode나 perspective 키워드 인자를 지원하지 않는 구버전일 경우 폴백
+        return search(
+            item["question"],
+            collection="papers_core",
+            technology=technology,
+            top_k=top_k,
+        )
 
 
 def rank_of(item: Dict[str, Any], mode: str) -> Optional[int]:
-    """검색 결과에서 골든셋의 정답 청크(source, page)가 처음 등장한 순위(1-based)를 반환."""
-    hits = search(
-        item["question"],
-        collection="papers_core",
-        technology=item["technology"],
-        top_k=max(KS),
-        mode=mode,
-    )
-    
+    """검색 결과에서 정답 청크가 처음 등장한 순위(1-based)를 반환.
+
+    판정 기준:
+    1) 골든셋에 정밀 'gold_chunk_id'가 명시되어 있다면 chunk_id 우선 비교 (오탐 방지)
+    2) 미명시 시 'source'와 'page' 일치 여부로 비교 (청킹 파라미터 변경 대비 호환성 유지)
+    """
+    hits = retrieve_chunks(item, mode=mode)
+
+    target_chunk_id = item.get("gold_chunk_id")
     target_source = item.get("gold_source")
     target_page = int(item.get("gold_page", -1))
 
     for idx, chunk in enumerate(hits, start=1):
+        chunk_id = chunk.get("chunk_id")
         chunk_source = chunk.get("source")
         chunk_page = int(chunk.get("page", -1))
-        
-        if chunk_source == target_source and chunk_page == target_page:
+
+        # 1) chunk_id 정밀 대조 (우선 순위)
+        if target_chunk_id and chunk_id == target_chunk_id:
             return idx
+
+        # 2) source + page 대조 (둘 다 유효한 페이지 번호일 때만 판정하여 -1 오탐 방지)
+        if (
+            target_source
+            and chunk_source == target_source
+            and target_page > 0
+            and chunk_page == target_page
+        ):
+            return idx
+
     return None
 
 
@@ -138,7 +186,7 @@ def main():
     # 설계서 §4 복사 붙여넣기용 마크다운 표 출력
     print("\n" + "\n".join(markdown_lines))
 
-    # 실행 결과 JSON 덤프
+    # 실행 결과 JSON 저장
     OUTPUT_JSON.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_JSON.write_text(json.dumps(report_data, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n✅ 실측 상세 데이터가 '{OUTPUT_JSON}'에 저장되었습니다.\n")
