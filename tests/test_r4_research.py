@@ -8,7 +8,6 @@ run_node 를 모두 가짜로 갈아끼워 LLM·색인을 타지 않는다.
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
 
 from src.schema import Assessment
 from src.agents import research as agent

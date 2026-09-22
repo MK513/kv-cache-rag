@@ -8,7 +8,6 @@ status=failed 시 claims=[] 가드레일이 지켜지는지 검사한다. papers
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
 
 from src.schema import Assessment
 from src.agents import domain as agent
