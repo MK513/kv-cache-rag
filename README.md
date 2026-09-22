@@ -15,7 +15,7 @@ KV cache 최적화 기술을 소프트웨어·하드웨어 두 진영에서 선�
 - **Objective** : 하나의 기술을 복수 관점에서 비교 평가 — 우열 판정이 아니라 관점 간
   근거의 일치·상충을 정리
 - **Method** : Multi-Agent(LangGraph fan-out/fan-in) + Agentic RAG
-- **Tools** : FAISS(dense 검색), Tavily(웹 검색), pdfplumber(PDF 파싱)
+- **Tools** : FAISS(dense 검색), Tavily(웹 검색), pdfplumber·pypdf(PDF 파싱)
 
 ### Selected Technologies
 
@@ -57,7 +57,8 @@ KV cache 최적화 기술을 소프트웨어·하드웨어 두 진영에서 선�
 | `stakeholder` | 경쟁·도입·개발자·투자 반응 평가 | 웹 (색인 안 함) |
 | `domain_assessment` | 데이터센터/클라우드 적합성 평가 | papers_core + context |
 | `synthesis` | 관점 간 일치·상충·근거 공백 병합, 결합 가설 분리 | State 읽기 |
-| `report` | 목차 조립 및 결정적 포맷팅 | State 읽기 |
+| `report` | 목차 조립 및 결정적 포맷팅 (Markdown) | State 읽기 |
+| `publish` | 레이아웃 확인 후 제출본 저장 (PDF 변환·품질 점검) | State 읽기 |
 
 ## Architecture
 
@@ -160,9 +161,13 @@ uv run python app.py
 `setup` 이 원문 SHA-256 을 매니페스트와 대조한다(설계서 §3). 어긋나면 경고를 출력하고
 **실행을 중단한다** — 의도한 갱신이면 `--refresh` 로 매니페스트를 다시 만든다.
 
-**첫 실행은 반드시 검토 대기로 멈춘다.** 실패가 아니다. 설계서 §8 이 *이 과정은 ID
-대조만으로 자동 통과시키지 않는다. 팀원이 주장과 근거를 나란히 보고 확인한다* 라고
+**검증을 통과하면 첫 실행은 검토 대기로 멈춘다.** 실패가 아니다. 설계서 §8 이 *이 과정은
+ID 대조만으로 자동 통과시키지 않는다. 팀원이 주장과 근거를 나란히 보고 확인한다* 라고
 정한다. 이 단계에서는 보고서도 PDF 도 나오지 않는다.
+
+Assessment 중 하나라도 `failed` 거나 미해결 인용 오류가 남으면 **검토 기회 없이
+`failed` 로 끝난다** — `final_check` 가 failed 를 검토 대기보다 먼저 본다(§7).
+사유는 `runs/<run_id>/run.json` 과 `validation-errors.json` 에 있다.
 
 ```
 검토 대기 — Claim 14건. runs/<run_id>/review.csv 의 review_result(확인|부결)·reviewer 를 채운 뒤
@@ -214,7 +219,7 @@ PDF 는 **검증을 통과했을 때만** 나온다(§8 — 무효 인용이 남
 
 | 값 | 뜻 |
 |---|---|
-| `completed` | 보고서 생성, 평가 보류 항목 없음 |
+| `completed` | 모든 Assessment 가 completed 이고 내용 검토를 통과했다 (근거 공백은 있을 수 있다) |
 | `partial` | 검토 대기로 멈췄거나, 근거 공백이 남은 채 보고서를 냈다 |
 | `failed` | Assessment 중 failed, 미해결 인용 오류, 병합 오류 |
 
