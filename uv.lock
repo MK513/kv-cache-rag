@@ -1331,6 +1331,11 @@ test = [
     { name = "pytest" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12" },
@@ -1355,6 +1360,9 @@ requires-dist = [
     { name = "weasyprint", marker = "extra == 'pdf'", specifier = ">=62" },
 ]
 provides-extras = ["test", "pdf"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.1.1" }]
 
 [[package]]
 name = "langchain"

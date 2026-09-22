@@ -1,40 +1,335 @@
 """Markdown → PDF — 담당: R5
 
-그래프와 분리한다. 폰트·시스템 라이브러리 문제로 파이프라인이 죽으면 안 된다.
+검토용 Markdown을 PDF로 변환하고 제출 전 품질 점검을 수행한다.
 
+원칙:
+- validation error가 있으면 제출본을 생성하지 않는다.
+- 검토용 초안과 최종 제출본 경로를 분리한다.
+- SUMMARY / 한글 / 표 / REFERENCE 기본 품질을 점검한다.
+- PDF 라이브러리 문제가 전체 그래프 실행을 중단시키지 않도록
+  이 모듈은 그래프와 분리해서 실행한다.
+
+사용:
     uv sync --extra pdf
     uv run python -m src.output.pdf
 """
 
+import json
 import sys
 from pathlib import Path
 
-SRC = Path("output/report.md")
-DST = Path("output/RAG-Output_판교_8반_권수진+권예리+김민+박인기+정승원.pdf")
 
-# 한글 폰트가 없으면 글자가 통째로 깨진다. 시스템 설치 이름에 맞출 것.
+RUNS_DIR = Path("runs")
+DEFAULT_REPORT = Path("output/report.md")
+
+FINAL_FILENAME = (
+    "RAG-Output_판교_8반_권수진+권예리+김민+박인기+정승원.pdf"
+)
+
+
 CSS = """
-@page { size: A4; margin: 20mm 18mm; }
-body { font-family: "AppleSDGothicNeo", "NanumGothic", "Malgun Gothic", sans-serif;
-       font-size: 10.5pt; line-height: 1.6; }
-h1 { font-size: 18pt; } h2 { font-size: 14pt; margin-top: 1.4em; } h3 { font-size: 12pt; }
-table { border-collapse: collapse; width: 100%; font-size: 9.5pt; }
-th, td { border: 1px solid #999; padding: 4px 6px; text-align: left; }
-code { font-size: 9pt; }
+@page {
+    size: A4;
+    margin: 20mm 18mm;
+}
+
+body {
+    font-family:
+        "Apple SD Gothic Neo",
+        "AppleSDGothicNeo",
+        "NanumGothic",
+        "Malgun Gothic",
+        sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.6;
+}
+
+h1 {
+    font-size: 18pt;
+}
+
+h2 {
+    font-size: 14pt;
+    margin-top: 1.4em;
+    page-break-after: avoid;
+}
+
+h3 {
+    font-size: 12pt;
+    page-break-after: avoid;
+}
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 9.5pt;
+    table-layout: fixed;
+}
+
+th,
+td {
+    border: 1px solid #999;
+    padding: 4px 6px;
+    text-align: left;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+tr {
+    page-break-inside: avoid;
+}
+
+code {
+    font-size: 9pt;
+    overflow-wrap: anywhere;
+}
+
+pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
 """
 
 
-def main():
+def _read_validation_errors(run_dir: Path) -> list:
+    """현재 run의 validation error를 읽는다."""
+    candidates = [
+        run_dir / "validation.json",
+        run_dir / "validation-errors.json",
+        run_dir / "final-validation.json",
+    ]
+
+    for path in candidates:
+        if not path.exists():
+            continue
+
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        if isinstance(data, list):
+            return data
+
+        if isinstance(data, dict):
+            return data.get("validation_errors") or data.get("errors") or []
+
+    return []
+
+
+def _extract_section(markdown_text: str, heading: str, next_heading: str) -> str:
+    """Markdown의 두 heading 사이 내용을 가져온다."""
+    start = markdown_text.find(heading)
+
+    if start == -1:
+        return ""
+
+    start += len(heading)
+
+    end = markdown_text.find(next_heading, start)
+
+    if end == -1:
+        end = len(markdown_text)
+
+    return markdown_text[start:end].strip()
+
+
+def check_summary(markdown_text: str) -> tuple[bool, str]:
+    """SUMMARY가 과도하게 긴지 간단히 점검한다."""
+    summary = _extract_section(
+        markdown_text,
+        "## SUMMARY",
+        "## 1. 분석 배경",
+    )
+
+    if not summary:
+        return False, "SUMMARY를 찾지 못함"
+
+    chars = len(summary.replace("\n", " ").strip())
+
+    # 실제 반 페이지 여부는 렌더링 환경에 따라 달라지므로
+    # 문자 수는 사전 경고용 heuristic으로만 사용한다.
+    if chars > 1200:
+        return False, f"SUMMARY가 길 수 있음 ({chars}자)"
+
+    return True, f"SUMMARY 길이 확인 ({chars}자)"
+
+
+def check_korean(markdown_text: str) -> tuple[bool, str]:
+    """원문에 한글이 존재하는지 점검한다."""
+    has_korean = any("가" <= char <= "힣" for char in markdown_text)
+
+    if not has_korean:
+        return False, "한글 텍스트를 찾지 못함"
+
+    return True, "한글 텍스트 존재 확인"
+
+
+def check_tables(markdown_text: str) -> tuple[bool, str]:
+    """Markdown 표 존재 여부와 과도하게 긴 행을 점검한다."""
+    table_lines = [
+        line for line in markdown_text.splitlines()
+        if line.strip().startswith("|")
+    ]
+
+    if not table_lines:
+        return True, "Markdown 표 없음"
+
+    longest = max(len(line) for line in table_lines)
+
+    if longest > 500:
+        return False, f"매우 긴 표 행 존재 ({longest}자)"
+
+    return True, f"표 기본 점검 완료 ({len(table_lines)}개 행)"
+
+
+def check_reference(markdown_text: str) -> tuple[bool, str]:
+    """REFERENCE가 존재하고 본문 뒤쪽에 위치하는지 확인한다."""
+    pos = markdown_text.rfind("## REFERENCE")
+
+    if pos == -1:
+        return False, "REFERENCE 섹션 없음"
+
+    ratio = pos / max(len(markdown_text), 1)
+
+    if ratio < 0.6:
+        return False, "REFERENCE가 문서 후반부에 있지 않음"
+
+    return True, "REFERENCE 위치 확인"
+
+
+def quality_checks(markdown_text: str) -> list[dict]:
+    """제출 전 자동 품질 점검."""
+    checks = []
+
+    for name, fn in [
+        ("summary", check_summary),
+        ("korean", check_korean),
+        ("table", check_tables),
+        ("reference", check_reference),
+    ]:
+        passed, message = fn(markdown_text)
+
+        checks.append({
+            "check": name,
+            "passed": passed,
+            "message": message,
+        })
+
+    return checks
+
+
+def render_pdf(markdown_path: Path, pdf_path: Path) -> None:
+    """Markdown을 PDF로 변환한다."""
     try:
         import markdown
-        from weasyprint import CSS as WCSS, HTML
-    except ImportError:
-        sys.exit("PDF 의존성 미설치.  uv sync --extra pdf  (macOS: brew install pango)")
+        from weasyprint import CSS as WCSS
+        from weasyprint import HTML
 
-    html = markdown.markdown(SRC.read_text(encoding="utf-8"),
-                             extensions=["tables", "fenced_code"])
-    HTML(string=html).write_pdf(DST, stylesheets=[WCSS(string=CSS)])
-    print(f"완료: {DST}")
+    except ImportError:
+        raise RuntimeError(
+            "PDF 의존성 미설치. "
+            "uv sync --extra pdf 를 실행하고, "
+            "macOS에서는 필요 시 brew install pango 를 실행하세요."
+        )
+
+    markdown_text = markdown_path.read_text(encoding="utf-8")
+
+    html = markdown.markdown(
+        markdown_text,
+        extensions=[
+            "tables",
+            "fenced_code",
+        ],
+    )
+
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+
+    HTML(string=html).write_pdf(
+        pdf_path,
+        stylesheets=[WCSS(string=CSS)],
+    )
+
+
+def build_submission(
+    markdown_path: Path,
+    final_path: Path,
+    validation_errors: list | None = None,
+) -> dict:
+    """검증 통과 시에만 최종 제출 PDF를 만든다."""
+    validation_errors = validation_errors or []
+
+    if validation_errors:
+        return {
+            "generated": False,
+            "reason": "validation_errors 존재",
+            "validation_errors": validation_errors,
+            "checks": [],
+            "path": None,
+        }
+
+    if not markdown_path.exists():
+        return {
+            "generated": False,
+            "reason": f"Markdown 파일 없음: {markdown_path}",
+            "validation_errors": [],
+            "checks": [],
+            "path": None,
+        }
+
+    markdown_text = markdown_path.read_text(encoding="utf-8")
+    checks = quality_checks(markdown_text)
+
+    failed_checks = [
+        check
+        for check in checks
+        if not check["passed"]
+    ]
+
+    if failed_checks:
+        return {
+            "generated": False,
+            "reason": "PDF 품질 사전 점검 실패",
+            "validation_errors": [],
+            "checks": checks,
+            "path": None,
+        }
+
+    render_pdf(markdown_path, final_path)
+
+    return {
+        "generated": True,
+        "reason": "ok",
+        "validation_errors": [],
+        "checks": checks,
+        "path": str(final_path),
+    }
+
+
+def main():
+    markdown_path = DEFAULT_REPORT
+    final_dir = Path("output/final")
+    final_path = final_dir / FINAL_FILENAME
+
+    validation_errors = []
+
+    result = build_submission(
+        markdown_path=markdown_path,
+        final_path=final_path,
+        validation_errors=validation_errors,
+    )
+
+    print("\n[PDF 제출 전 점검]")
+
+    for check in result["checks"]:
+        mark = "PASS" if check["passed"] else "FAIL"
+        print(f"- {check['check']}: {mark} — {check['message']}")
+
+    if not result["generated"]:
+        print(f"\n제출본 생성 안 함: {result['reason']}")
+        sys.exit(1)
+
+    print(f"\n완료: {result['path']}")
 
 
 if __name__ == "__main__":
