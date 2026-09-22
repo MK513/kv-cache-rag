@@ -159,7 +159,7 @@ def test_claim_kind_is_visible(monkeypatch):
     markdown = report_module.report(state)["report"]
 
     assert "**[사실 · ITME]**" in markdown
-    assert "**[가설 · both]**" in markdown
+    assert "**[가설 · 두 기술]**" in markdown
     assert "> 전제: 개별 근거에서 도출한 추론이다" in markdown
 
 
@@ -264,3 +264,25 @@ def test_unknown_citation_id_is_left_alone(monkeypatch):
     state["maturity"]["claims"][0]["text"] = "근거 없는 인용 [ffffffffffff]."
 
     assert "[ffffffffffff]" in report_module.report(state)["report"]
+
+
+def test_overview_section_has_no_verdict_labels(monkeypatch):
+    """§9 — 3 기술 개요는 각 기술의 접근 방식과 적용 조건을 적는 서술 절이다."""
+    monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
+
+    markdown = report_module.report(_state())["report"]
+    overview = markdown[markdown.index("## 3. 기술 개요"):markdown.index("## 4. 관점별 평가")]
+    perspectives = markdown[markdown.index("## 4. 관점별 평가"):markdown.index("## 5. 시사점")]
+
+    assert "**[사실" not in overview and "기술 조사 본문" in overview
+    assert "**[사실 · ITME]**" in perspectives      # §4 에는 남는다
+
+
+def test_both_is_written_in_korean(monkeypatch):
+    monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
+
+    state = _state()
+    state["maturity"]["claims"][0]["technology"] = "both"
+    markdown = report_module.report(state)["report"]
+
+    assert "**[사실 · 두 기술]**" in markdown and "· both]" not in markdown

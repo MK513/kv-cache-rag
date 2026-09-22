@@ -23,6 +23,7 @@ def _bullets(items) -> str:
 
 PERSPECTIVE_NODES = ["research", "maturity", "market", "stakeholder", "domain_assessment"]
 KIND_LABEL = {"fact": "사실", "inference": "추론", "hypothesis": "가설"}
+TECH_LABEL = {"both": "두 기술"}      # 내부 enum 값을 그대로 지면에 내보내지 않는다
 CITATION_RE = re.compile(r"\[([0-9a-f]{12})\]")
 
 
@@ -64,21 +65,28 @@ def _approved(state: dict) -> dict:
     return approved
 
 
-def _claims(assessment: dict) -> str:
-    """Claim 을 종류·대상 기술과 함께 본문으로 편다(§6 — 사실과 추론을 구분한다)."""
+def _claims(assessment: dict, *, labels: bool = True) -> str:
+    """Claim 을 본문으로 편다.
+
+    `labels=True` 는 §4 관점별 평가용이다 — §6 이 *공개 자료에서 확인한 사실과 그 사실에서
+    추론한 내용을 구분한다* 고 해서 종류와 대상 기술을 함께 적는다.
+    §3 기술 개요는 §9 목차표가 *각 기술의 접근 방식과 적용 조건* 이라고 한 서술 절이라
+    판정 표시를 붙이지 않는다.
+    """
     claims = assessment.get("claims") or []
     if not claims:
         return "- 승인된 주장 없음. 근거 공백은 §6 을 참고한다."
 
     blocks = []
     for claim in claims:
-        kind = KIND_LABEL.get(claim.get("kind", ""), claim.get("kind", ""))
-        head = f"**[{kind} · {claim.get('technology', '')}]**"
         body = (claim.get("text") or "").strip()
-        block = f"{head}\n{body}"
+        if labels:
+            kind = KIND_LABEL.get(claim.get("kind", ""), claim.get("kind", ""))
+            technology = claim.get("technology", "")
+            body = f"**[{kind} · {TECH_LABEL.get(technology, technology)}]**\n{body}"
         if claim.get("explanation"):
-            block += f"\n> 전제: {claim['explanation'].strip()}"
-        blocks.append(block)
+            body += f"\n> 전제: {claim['explanation'].strip()}"
+        blocks.append(body)
     return "\n\n".join(blocks)
 
 
@@ -231,7 +239,7 @@ ITME를 대상으로, TRL·시장성·이해관계자·도메인 네 관점에�
 
 ## 3. 기술 개요
 
-{_claims(approved["research"])}
+{_claims(approved["research"], labels=False)}
 
 ## 4. 관점별 평가
 
