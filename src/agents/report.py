@@ -24,6 +24,8 @@ def _bullets(items) -> str:
 PERSPECTIVE_NODES = ["research", "maturity", "market", "stakeholder", "domain_assessment"]
 KIND_LABEL = {"fact": "사실", "inference": "추론", "hypothesis": "가설"}
 TECH_LABEL = {"both": "두 기술"}      # 내부 enum 값을 그대로 지면에 내보내지 않는다
+ROLE_LABEL = {"research": "기술 조사", "maturity": "TRL", "market": "시장성",
+              "stakeholder": "이해관계자", "domain": "도메인 적용", "synthesis": "종합"}
 CITATION_RE = re.compile(r"\[([0-9a-f]{12})\]")
 
 
@@ -119,25 +121,40 @@ def _reused() -> str:
             f"그대로 사용했다(이번 실행에서 새로 생성 {report.get('cache_misses', 0)}건).")
 
 
-def _gap_lines(state: dict) -> list[str]:
-    """§6 한계에 실을 근거 공백. 검토 부결 항목도 여기로 옮긴다(§8)."""
-    lines = []
+def _gaps_section(state: dict) -> str:
+    """§6 한계의 근거 공백. 평평하게 나열하면 수십 줄이 되므로 관점별로 묶는다.
+
+    §9 목차표 — 6 한계는 자료 공백을 담는다. 항목 자체는 §5 의 *자료가 없는 항목은 평가
+    보류로 남긴다* 를 이행한 기록이라 줄이지 않는다.
+    """
+    grouped: dict[str, list[str]] = {}
     for gap in state.get("gaps") or []:
         item, technology = gap.get("item", ""), gap.get("technology", "")
         # item 이 이미 기술명을 담고 있으면 접두어를 붙이지 않는다.
-        # LLM 이 쓴 문장이라 담을 때도 있고 아닐 때도 있다.
-        head = item if technology and technology in item else f"{technology} {item}".strip()
-        lines.append(f"{head}: {gap.get('reason', '')}".strip(": ").strip())
+        head = item if technology and technology in item else \
+            f"{TECH_LABEL.get(technology, technology)} {item}".strip()
+        line = f"{head}: {gap.get('reason', '')}".strip(": ").strip()
+        grouped.setdefault(gap.get("role", ""), []).append(line)
 
     validation = state.get("validation") or {}
     verdicts = validation.get("claim_verdicts") or {}
     for claim_id in validation.get("rejected_claims") or []:
         verdict = verdicts.get(claim_id) or {}
-        reviewer = verdict.get("reviewer") or "검토자 미상"
-        comment = verdict.get("comment") or "사유 미기재"
-        lines.append(f"검토 부결: {claim_id} (검토자: {reviewer} — {comment})")
-    return lines
+        grouped.setdefault("review", []).append(
+            f"검토 부결: {claim_id} (검토자: {verdict.get('reviewer') or '검토자 미상'} — "
+            f"{verdict.get('comment') or '사유 미기재'})")
 
+    if not grouped:
+        return "- 해당 없음"
+
+    blocks = []
+    for role in list(ROLE_LABEL) + ["review"]:
+        items = grouped.get(role)
+        if not items:
+            continue
+        label = "내용 검토" if role == "review" else ROLE_LABEL[role]
+        blocks.append(f"*{label}* ({len(items)}건)\n" + _bullets(items))
+    return "\n\n".join(blocks)
 
 SUMMARY_TOP = 3     # §9 — SUMMARY 는 PDF 반 페이지 이내다. 전체 목록은 §5·§6 에 있다.
 
@@ -277,7 +294,7 @@ ITME를 대상으로, TRL·시장성·이해관계자·도메인 네 관점에�
 
 **확인된 근거 공백**
 
-{_bullets(_gap_lines(state))}
+{_gaps_section(state)}
 
 **조사 시점과 검토 범위**
 

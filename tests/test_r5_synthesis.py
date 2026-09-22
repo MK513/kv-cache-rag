@@ -103,3 +103,19 @@ def test_rewrite_uses_the_validation_field(llm):
 def test_no_conflict_is_allowed(llm):
     """§5 — 상충하는 의견을 억지로 만들지 않는다. conflicts 가 비어도 통과한다."""
     assert node.synthesis(STATE)["synthesis"]["conflicts"] == []
+
+
+def test_restated_gap_is_not_added_again(llm):
+    """§6 — 종합은 공백을 *정리* 한다. 말만 바꿔 다시 싣지 않는다."""
+    llm.result = Synthesis(gaps=["maturity 공백에 대한 추가 확인 필요"],
+                           combination_hypothesis="가설")
+    items = [gap["item"] for gap in node.synthesis(STATE)["gaps"]]
+
+    assert items == ["maturity 공백"]
+
+
+def test_genuinely_new_gap_is_kept(llm):
+    llm.result = Synthesis(gaps=["총소유비용 정량치"], combination_hypothesis="가설")
+    gaps = node.synthesis(STATE)["gaps"]
+
+    assert [g["item"] for g in gaps] == ["maturity 공백", "총소유비용 정량치"]

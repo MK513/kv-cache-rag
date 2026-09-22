@@ -152,12 +152,19 @@ def test_every_assessment_merges_into_the_registries(wired):
 
 
 def test_gaps_are_merged_sequentially(wired):
-    """§7 — 합류 후 수집, 종합 후 순차 병합."""
+    """§7 — 합류 후 수집, 종합 후 순차 병합.
+
+    fixture 의 종합 공백("두 기술의 결합 실측 자료 미확인")은 노드가 이미 보고한
+    "결합 실측 자료 없음" 을 되풀이한 것이라 걸러진다. §6 은 종합에게 공백을 *정리* 하라고
+    한다 — 같은 내용을 말만 바꿔 다시 싣지 않는다.
+    """
     final, _ = wired()
     roles = {gap["role"] for gap in final["gaps"]}
+    items = [gap["item"] for gap in final["gaps"]]
 
-    assert "synthesis" in roles                  # 종합이 덧붙인 공백
     assert roles & {"research", "maturity", "market", "stakeholder", "domain"}
+    assert "결합 실측 자료 없음" in items
+    assert "두 기술의 결합 실측 자료 미확인" not in items
 
 
 def test_resume_after_review_produces_the_submission(wired, tmp_path):

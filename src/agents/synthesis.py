@@ -10,6 +10,8 @@
 `Synthesis`·`Conflict` 는 `src/schema.py` 가 소유한다. 여기서 다시 정의하지 않는다.
 """
 
+import difflib
+
 from src.llm import get_llm
 from src.schema import Gap, Synthesis
 
@@ -19,6 +21,15 @@ PERSPECTIVES = [
     "stakeholder",
     "domain_assessment",
 ]
+
+
+GAP_SIMILARITY = 0.6    # 실측: 종합이 다시 쓴 공백은 대개 0.6~0.9, 새 항목은 0.5 미만
+
+
+def _restates(item: str, existing: list[str]) -> bool:
+    """이미 있는 공백을 말만 바꿔 되풀이한 것인지 본다."""
+    return any(difflib.SequenceMatcher(None, item, seen).ratio() >= GAP_SIMILARITY
+               for seen in existing)
 
 
 def _claims_text(assessment: dict) -> str:
@@ -95,8 +106,9 @@ def synthesis(state) -> dict:
     errors = (state.get("validation") or {}).get("errors") or []
 
     merged_gaps = list(state.get("gaps") or [])          # collect_evidence 가 합류시킨 공백
-    # 같은 공백을 역할만 바꿔 두 번 싣지 않는다. 보고서 §6 에 같은 줄이 두 번 나온다.
-    seen = {gap.get("item", "") for gap in merged_gaps}
+    # §6 은 종합에게 공백을 "정리" 하라고 한다. 그런데 모델은 노드가 이미 보고한 공백을
+    # 자기 말로 다시 쓴다. 문자열 완전 일치로는 못 걸러서 유사도로 본다.
+    seen = [gap.get("item", "") for gap in merged_gaps]
 
     result = get_llm().with_structured_output(Synthesis).invoke(
         PROMPT.format(
@@ -113,8 +125,8 @@ def synthesis(state) -> dict:
     for item in result.gaps:
         gap = Gap(role="synthesis", technology="both", item=item,
                   reason="종합 단계에서 확인한 공백").model_dump()
-        if item not in seen:
-            seen.add(item)
+        if not _restates(item, seen):
+            seen.append(item)
             merged_gaps.append(gap)
 
     # 보고서 §5 가 읽는 목록에도 앞 단계 공백을 남긴다.
