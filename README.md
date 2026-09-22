@@ -1,56 +1,66 @@
 # KV cache 최적화 기술 다관점 평가
 
-SW 압축(**TurboQuant**) vs HW 메모리 접근(**ITME**) — 데이터센터/클라우드 도메인
-LangGraph Multi-Agent + Agentic RAG 기반 평가 보고서 자동 생성
+KV cache 최적화 기술을 소프트웨어·하드웨어 두 진영에서 선정해 TRL·시장성·이해관계자·도메인
+관점에서 비교하고, **근거의 일치·상충을 구조화**하는 Agentic RAG.
 
 **판교 8반** · 권수진 · 권예리 · 김민 · 박인기 · 정승원
 
-## R1 구현 브랜치 안내 (2026-09-22)
-
-브랜치 `feat/r1-graph-state-schema`. 최신 설계서의 **공용 스키마·State·그래프·실행 제어**를
-구현한다. R3(검색·웹 근거·이해관계자)는 main에 들어와 있다.
-
-**아래 3절 이후 본문은 이전 설계 기록이다.** R2/R4/R5가 새 계약으로 이행하면 각자 고친다.
-특히 구버전의 `validate_eval`/`validate_final`/`abort`, 관점 dict `{text, citations, gaps}`,
-`evidence` 단일 쓰기 주체, RRF 설정은 더 이상 현행이 아니다.
-State와 그래프는 설계서 §7 표와 부록 A 그래프 소스를 그대로 옮겼다.
-
-| 바뀐 것 | 어디 |
-|---|---|
-| 공용 모델 Claim/Assessment/Source/Evidence/Gap/Synthesis/Event | [`src/schema.py`](src/schema.py) |
-| State — 설계서 §7 표 그대로(14행 / 17필드), 필드별 쓰기 주체 | [`src/state.py`](src/state.py) · [interface.md ①](docs/interface.md) |
-| 그래프 — 부록 A 소스 그대로, 조건부 엣지는 `final_check` 하나 | [`src/graph.py`](src/graph.py) |
-| 내용 검토 계약 `validation`·`review_status` | [interface.md ④](docs/interface.md) |
-| run_id·`runs/<run_id>/`·run_status·검토 후 재개 | [`app.py`](app.py) |
-
-- R1 인수·검증 결과: [docs/r1-handoff.md](docs/r1-handoff.md)
-- 4경로 실행 증빙: [docs/evidence/r1/runs/checks.json](docs/evidence/r1/runs/checks.json)
-- R3 계약과 인수 기록: [interface.md](docs/interface.md#r3-최신-설계서-적용-계약-2026-09-22) · [r3-handoff.md](docs/r3-handoff.md)
-
-```bash
-uv sync --extra test
-uv run pytest -q
-uv run python -m scripts.r1_smoke --root /tmp/kv-r1-run    # 그래프 4경로 (mock)
-uv run python -m scripts.r3_smoke --root /tmp/kv-r3-run    # 검색·웹 (합성 fixture)
-```
-
-`uv run python app.py` 는 **검토 대기에서 멈춘다.** 실패가 아니라 설계서 §8 이 요구하는
-사람의 내용 검토 단계다. 전체 절차는 [7. 실행](#7-실행) 참고.
-smoke 가 남기는 보고서·주장은 합성 데이터이며 실제 기술 평가가 아니다.
+- 계약 문서 → [docs/interface.md](docs/interface.md)
+- 인수 기록 → [docs/r1-handoff.md](docs/r1-handoff.md) · [docs/r3-handoff.md](docs/r3-handoff.md)
 
 ---
 
-## 1. 무엇을 하는가
+## Overview
 
-KV cache는 연산 병목을 메모리 병목으로 옮겨 놓았다. SW 진영은 **데이터를 작게**,
-HW 진영은 **공간을 넓게** 접근한다. 이 시스템은 두 기술을 TRL·시장성·이해관계자·도메인
-네 관점에서 조사하고, **관점 간 근거가 어디서 일치하고 어디서 상충하는지**를 정리한다.
+- **Objective** : 하나의 기술을 복수 관점에서 비교 평가 — 우열 판정이 아니라 관점 간
+  근거의 일치·상충을 정리
+- **Method** : Multi-Agent(LangGraph fan-out/fan-in) + Agentic RAG
+- **Tools** : FAISS(dense 검색), Tavily(웹 검색), pdfplumber(PDF 파싱)
 
-> **우열 판정을 하지 않는다.** 승자를 뽑는 게 아니라 왜 관점마다 답이 달라지는지를 쓴다.
+### Selected Technologies
+
+- **SW : TurboQuant** — KV cache를 저비트로 압축해 메모리 병목을 데이터 크기 축소로 해결
+- **HW : ITME** — 메모리 접근 공간을 넓혀 KV cache 병목을 하드웨어 관점에서 해결
 
 ---
 
-## 2. 시스템 구조
+## Features
+
+- PDF·웹 자료 기반 정보 추출 (papers_core 4 · ecosystem 5 · context 1 = PDF 6·웹 4,
+  `scripts/prepare_sources.py`가 SHA-256·쪽수 매니페스트 생성)
+- 근거 소재별 컬렉션 분리(`papers_core`/`ecosystem`/`context`)로 관점 간 근거 오염 방지
+- dense(FAISS, multilingual-e5-small) 단일 검색 + 역할별 컬렉션·scope 접근 제어(`ROLE_COLLECTIONS`)
+- 결정적(비-LLM) 인용 검증과 사람의 내용 검토를 `review` 노드에서 수행, 미해결 오류는
+  `fail`이 로그를 남기고 제출용 출력을 차단
+- 검토 대기 상태에서 실행을 멈추고 사람의 내용 검토 후 재개(`app.py --resume <run_id>`)
+- 확증 편향 방지 전략 : 상충을 강제하지 않되(억지 상충 금지) 기술별 검색 기회를 맞추고,
+  비교군 논문이 기술 조사의 1차 근거로 올라오지 않도록 검색 필터링 + 검색 풀 확대(4배)로
+  비대칭 코퍼스의 쏠림을 완화
+
+## Tech Stack
+
+- **Framework** : LangGraph
+- **LLM/Generator** : gpt-5.6-luna (fallback: gpt-4.1-mini)
+- **LLM/Judge** : 해당 없음 — 인용 검증은 LLM 채점이 아닌 인덱스 실물 대조 방식의 결정적 검사
+- **Retrieval** : FAISS dense 단일 모드 (Hit@K·MRR@K 측정 스크립트 구현, 정답 청크 라벨링
+  미완으로 수치 미확정)
+- **Embedding** : intfloat/multilingual-e5-small (384차원, cross-lingual, revision 고정)
+
+---
+
+## Agents
+
+| 노드 | 역할 | 근거 |
+|---|---|---|
+| `research` | 접근 방식·적용 범위·한계 추출, Assessment 반환 | papers_core |
+| `maturity` | TRL 규칙표 기반 성숙도 판정 | papers_core |
+| `market` | 규모·채택·생태계 평가 | ecosystem |
+| `stakeholder` | 경쟁·도입·개발자·투자 반응 평가 | 웹 (색인 안 함) |
+| `domain_assessment` | 데이터센터/클라우드 적합성 평가 | papers_core + context |
+| `synthesis` | 관점 간 일치·상충·근거 공백 병합, 결합 가설 분리 | State 읽기 |
+| `report` | 목차 조립 및 결정적 포맷팅 | State 읽기 |
+
+## Architecture
 
 ```mermaid
 flowchart TD
@@ -69,235 +79,37 @@ flowchart TD
   V -->|검토 대기| W[검토용 초안 저장 · save_draft]
   W -->|검토 결과 반영 후 재개| R
   V -->|미해결 오류| X[failed 오류와 로그 저장 · fail]
-  V -->|통과| G[Markdown과 PDF 생성 · report]
+  V -->|통과| G[Markdown 생성 · report]
   G --> Z[레이아웃 확인 후 제출본 저장 · publish]
 ```
 
-설계서 부록 A의 그래프 소스를 그대로 옮긴 것이다. `docs/evidence/r1/graph.mmd`가
-실제 컴파일된 그래프다.
+설계서 부록 A의 그래프 소스를 그대로 옮긴 것이다. **조건부 엣지는 `final_check` 하나뿐**이고,
+되돌아오는 엣지는 `save_draft → review`(검토 결과 반영 후 재개) 하나뿐이다. 재시도는 노드
+내부의 최대 1회 처리다.
 
-**재시도는 노드 내부의 최대 1회 처리다**(부록 A). 그래서 조건부 엣지는 `final_check`
-하나뿐이고, 되돌아오는 엣지는 `save_draft → review`(검토 결과 반영 후 재개) 하나뿐이다.
-`final_check`는 인용 오류와 사람의 내용 검토 완료 여부를 함께 확인한다.
-
-**검토 대기는 초안만 저장하고 멈춘다.** 사람의 검토 결과가 있어야 `review`로 돌아갈 수
-있으므로 `save_draft` 뒤에서 실행이 정지한다. 사람이 `draft.json`의 `validation`·
-`review_status`를 고치고 `app.py --resume <run_id>`로 내용 검토부터 이어 간다.
-
-**병합 오류는 분기가 아니라 예외다.** 같은 ID에 다른 내용이 들어오면 어느 원문을
-가리키는지 고를 근거가 없다(§7). `merge-errors.json`을 남기고 실행을 끝낸다 —
-어긋난 근거로 종합·검토에 LLM을 태우지 않는다.
-
-**`collect_evidence`는 다섯 Assessment를 병합한다.** 기술 조사 근거도 레지스트리에 있어야
-참고문헌을 실제 인용에서 역으로 만들 수 있다(§8·§9).
-
-### 에이전트 7종
-
-| 노드 | 역할 | RAG | 근거 출처 |
-|---|---|:---:|---|
-| `research` | 접근 방식·적용 범위·한계 추출, `tech_status` 판정 | **O** | `papers_core` |
-| `maturity` | TRL 규칙표로 성숙도 판정 | **O** | `papers_core` (다른 쿼리) |
-| `market` | 규모·채택·생태계 | **O** | `ecosystem` |
-| `stakeholder` | 경쟁·도입·개발자·투자 반응 | X | 웹 (색인 안 함) |
-| `domain_assessment` | 데이터센터/클라우드 적합성 | **O** | `papers_core` + `context` |
-| `synthesis` | 일치·상충·gaps 병합, 결합 가설 분리 | X | State 읽기 전용 |
-| `report` | 목차 조립 | X | 결정적 포맷터 |
-
-가이드 원안 6개에 **TRL 전담 노드를 추가해 7개**. TRL은 4대 평가 관점인데 원안 표에
-전담 노드가 없어, 시장 노드가 겸하면 "논문 실험 근거"와 "시장 매출 근거"가 섞인다.
-
----
-
-## 3. 차별점
-
-**① 근거의 소재에 따라 검색 경로를 나눴다**
-시장 근거는 논문 본문에 없다. `papers_core`에서 시장을 검색하면 **의미적으로 가장 가까운
-기술 서술**(성능 수치, 실험 하드웨어)이 회수돼 시장 근거 자리에 놓이고, LLM이 그걸로
-시장성 주장을 만든다. "자료가 없으면 미확인" 원칙이 무력화된다.
-→ 시장 근거를 **`ecosystem` 컬렉션으로 따로 색인**하고, `market` 노드는 그 컬렉션만 본다.
-실시간 웹 조회 대신 색인을 택한 이유는 재현성과 200쪽 가드 안에서의 관리다.
-
-**② 우열 판정을 프롬프트가 아니라 스키마로 막았다**
-`conflicts: list[Conflict] = Field(min_length=1)`. 관점별 상충이 0건이면 구조 검증에서
-걸린다. `favors`는 "종합 승자"가 아니라 "이 관점의 근거가 유리하게 읽히는 쪽"으로 정의된다.
-결합 가설은 별도 필드로 빼서 §5.4에만 배치했다. → `src/agents/synthesis.py`
-
-**③ evidence 단일 쓰기 주체**
-`maturity`·`domain_assessment`도 인덱스를 조회하지만 `evidence`에 쓰지 않고 자기 키에만
-반영한다. 병렬 fan-out에서 동시 쓰기가 **구조적으로 불가능**하다. 누적 reducer는 `trace` 하나.
-
-**④ 인용 검증은 LLM이 아니라 결정적 검사, 그것도 2단계**
-`validate_eval`(평가 재실행) / `validate_final`(종합 재작성). 한도 초과 시 조용히
-통과시키지 않고 `abort` 노드가 실패를 보고서 자리에 남긴다. → `src/output/validate.py`
-
-**⑤ BM25만 영어 키워드로 변환한다**
-BM25는 어휘 매칭이라 한국어 질의로 영어 논문을 못 찾는다. 반면 e5-small은
-cross-lingual이라 **한국어 원문 질의를 그대로 넣는 게** 이 모델을 쓰는 이유다.
-→ dense는 원문 질의, BM25만 고정 용어사전으로 변환. LLM 번역을 쓰지 않아
-지연·비용이 없고 실행 간 결과가 흔들리지 않는다. 변환 이력은 `trace`에 남는다.
-
----
-
-## 4. RAG 설계
-
-### 3 컬렉션 (설계서 §3)
-
-출처 목록은 [`sources.json`](sources.json), 수집·해시·쪽수는
-[`scripts/prepare_sources.py`](scripts/prepare_sources.py) 가 만드는
-`data/manifest.json` 이 단일 원천이다. 상세는 [docs/corpus-prep.md](docs/corpus-prep.md).
-
-| 컬렉션 | 문서 | 쪽 | 용도 |
-|---|---|---:|---|
-| `papers_core` | turboquant-paper `direct` · itme-paper `direct` · infinigen-paper `comparison` · pim-cxl-paper `comparison` | 70 | research · maturity · domain |
-| `ecosystem` | turboquant-blog · cxl-whitepaper · vllm-quantized-kvcache · vllm-prefix-caching · skhynix-cmm-validation | 15.4 | market |
-| `context` | kv-cache-survey `secondary` (1~32쪽만 발췌, 참고문헌 제외) | 32 | domain (배경 서술만) |
-| (웹 조회) | 이해관계자 반응 — 색인 안 함 | — | stakeholder |
-| | **합계** | **117.4 / 200** | |
-
-> `papers_core`에 InfiniGen·PIM-CXL(비교군)을 그대로 뒀다. 애초 계획은 이 둘을
-> ecosystem/context로 옮겨 38/48.3/35쪽 배분에 맞추는 것이었지만, R3가 구현한
-> `ROLE_COLLECTIONS`(`src/rag/retrieve.py`)가 `maturity`·`domain` 역할을 `papers_core`
-> (+`context`, domain만)로만 제한해서, 옮기면 두 비교군 논문이 TRL·도메인 평가에서
-> 아예 검색되지 않는다. 정확한 쪽수 배분보다 기능적 도달 가능성을 우선했다 — 정확한
-> 배분이 꼭 필요하면 R3·R4와 `ROLE_COLLECTIONS` 확장을 논의할 것.
-
-웹 문서는 **A4·9.5pt 기준 3,200자 = 1쪽**으로 환산해 가드에 합산한다.
-매니페스트에 SHA-256 · 수집일 · 쪽수 · `page_basis` 를 기록한다.
-
-`scope` 로 근거의 격을 나눈다 — `direct`(선정 기술 1차) / `comparison`(계열 비교) /
-`ecosystem`(인접 생태계, 직접 채택 근거 아님) / `secondary`(2차 자료).
-`perspectives` 는 어느 노드가 그 문서를 볼 수 있는지를 정한다. 검색 시 필터로 걸어
-**비교군 논문이 기술 조사의 1차 근거로 올라오지 않게** 한다.
-
-> `papers_core` 는 ITME 계열 3편 : TurboQuant 계열 1편으로 비대칭이다.
-> 필터가 랭킹 뒤에 걸리므로, 기술·관점 필터가 있을 때는 검색 풀을 4배로 키워
-> 한 기술 근거가 통째로 밀려나지 않게 한다(설계서 §5 확증 편향 완화).
-
-### 청킹
-
-**토큰 400 / overlap 80**, 임베딩 입력 한도 512 상한.
-`RecursiveCharacterTextSplitter.from_huggingface_tokenizer`로 토큰 기준 분할한다.
-**표는 행 단위로 쪼개되 매 조각에 헤더 행을 반복**한다 — 표를 통째로 자르면 행이 어느
-열에 속하는지 잃어버려 벤치마크 수치 인용이 망가진다.
-청크 ID는 `(출처, 페이지, 본문 해시)`라 재실행해도 인용 ID가 안정적이다.
-
-### 검색
-
-**dense(FAISS, 원문 질의) 단독.** 애초엔 BM25(영어 키워드 변환 질의)와 RRF로 융합할
-계획이었으나, R3가 검색 품질 실측 없이 하이브리드를 유지할 근거가 없다고 판단해
-dense만 남겼다(`src/rag/retrieve.py`, `mode='rrf'`는 이제 `ValueError`). `technology`
-필터로 기술별 검색량을 균형 유지하고, `perspective`로 역할별 컬렉션·scope 접근을 강제한다
-(`ROLE_COLLECTIONS`/`ROLE_SCOPES`). 키워드 변환용 `src/rag/query_kw.py`는 BM25 축이
-없어져 더 이상 검색 경로에서 쓰이지 않는다(레거시, 제거 가능).
-
-### 임베딩 모델 선정 (설계서 §4)
-
-선정 근거는 리더보드 순위가 아니라 **입력 언어(한국어 질의 + 영어 논문), 원문 길이,
-로컬 연산/메모리 비용**이다.
-
-| 후보 | 적용 근거 | 결정 |
-|---|---|---|
-| **multilingual-e5-small** | 한/영 혼재 검색, 384차원, CPU 로컬 실행 | **채택** |
-| BGE-M3 | 다국어·긴 입력 | 제외 — 400토큰 청크 설계라 장문 지원이 필요한 전환 조건이 없음. 더 큰 벡터·모델 비용 대비 이득 없음 |
-| all-MiniLM-L6-v2 | 짧은 영어 문장 | 제외 — 영어 전용이라 한국어 질의 회수 불가 |
-
-`revision`·차원(384)을 고정해 재실행 간 인덱스가 흔들리지 않게 한다.
-
-> ⚠️ **아래 수치는 현재 저장소에서 재현되지 않는다.** `eval/goldenset.json` 에 문항이
-> 2건뿐이고, 설계서 §4 가 요구하는 `gold_chunk_ids`(정답 청크 ID)가 지정돼 있지 않다.
-> 지금 `eval/retrieval_metrics.py` 를 실행하면 라벨링을 요구하며 중단한다.
-> 20문항 평가셋과 정답 청크 라벨링이 채워지기 전까지 이 표는 **미검증 기록**이다
-> (§10 — 미측정된 지표를 확정된 결과로 기재하지 않는다).
-
-**실측(미검증)** — 설계서 §4 "측정 예정" 칸을 채우려던 값 (2026-09-22, mode=dense 단일)
-
-| 구분 | n | Hit@1 | Hit@3 | Hit@5 | MRR@1 | MRR@3 | MRR@5 |
-|---|---|---|---|---|---|---|---|
-| 전체 | 20 | 0.700 | 0.850 | 0.950 | 0.700 | 0.767 | 0.792 |
-| ko | 10 | 0.500 | 0.700 | 0.900 | 0.500 | 0.600 | 0.650 |
-| en | 10 | 0.900 | 1.000 | 1.000 | 0.900 | 0.933 | 0.933 |
-
-완전 회수율(같은 사실의 ko·en 문항이 **모두** 회수된 비율) — fact 10건 기준:
-@1 = 0.500 · @3 = 0.700 · @5 = 0.900
-
-> ko 회수율이 en보다 뚜렷이 낮다(Hit@1 0.500 vs 0.900). e5-small이 cross-lingual이라도
-> 한국어 질의 쪽이 상대적으로 더 어렵게 매칭된다는 신호다 — ko 질의 표현을 좀 더
-> 원문 어휘에 가깝게 다듬을 여지가 있다. n=10이라 `⚠ 표본 부족(경향만)` 경고가 뜬다.
-> 24~30문항으로 늘리면 신뢰도가 올라간다.
->
-> ⚠️ RRF/BM25 하이브리드는 R3가 실측 근거 없이 제거해 더 이상 존재하지 않는다
-> (`src/rag/retrieve.py`의 `mode='rrf'`는 `ValueError`). 위 표는 dense 단일 모드다.
-
-**실패한 질의 패턴** (설계서 §10 공개 요구) — top-5 안에서도 정답 청크를 못 찾은 문항:
-
-```bash
-uv run python -m eval.find_failed_queries
-```
-
-> Hit@5=0.950(20문항 중 1건 실패)이므로 ko 문항 1건이 top-5 밖으로 밀린다. 정확히 어떤
-> 문항인지, 대신 무엇이 반환됐는지는 위 명령 실행 결과로 채운다. _(실행 후 이 자리에
-> 문항 ID·질문·반환된 상위 문서를 채워 넣을 것)_
-
-```bash
-uv run python scripts/prepare_sources.py --verify
-uv run python -m scripts.ingest
-uv run python -m eval.retrieval_metrics
-uv run python -m eval.find_failed_queries
-```
-
-> 개발용 검색 점검이며 답변의 사실성을 증명하지 않는다.
-
----
-
-## 5. State 17키
-
-각 평가 관점은 **자기 키만** 갱신한다. 누적 reducer는 `trace` 하나뿐이다.
-관점 dict 공통 구조는 `{text, citations, gaps}`.
-
-| 키 | 단독 쓰기 주체 |
-|---|---|
-| `domain` · `sources` | 입력 / 인덱스 매니페스트 |
-| `evidence` · `research` · `tech_status` · `gaps` · `retrieval_round` | `research` |
-| `maturity` / `market` / `domain_assessment` | 각 노드 |
-| `stakeholder` · `web_sources` | `stakeholder` |
-| `synthesis` | `synthesis` |
-| `validation_errors` · `validation_round` | `output/validate.py` |
-| `report` | `report` / `abort` |
-| `trace` | 전 노드 (`operator.add`) |
-
----
-
-## 6. Directory Structure
+## Directory Structure
 
 ```
-├── sources.json            # 코퍼스 출처 명세 (R2)
-├── scripts/
-│   ├── prepare_sources.py  # 원문 수집 + data/manifest.json 생성 (R2)
-│   ├── ingest.py            # 인덱스 점검 스모크 테스트 (R2)
-│   └── r3_smoke.py          # R3 합성 데이터 재현 실행
-├── data/
-│   ├── raw/                 # 원문 (Git 제외, prepare_sources.py 로 재생성)
-│   └── manifest.json        # 해시·쪽수·버전 기록 (생성 산출물)
+├── data/                    # 문서 풀 (원문 raw/, 해시·쪽수 manifest.json)
 ├── src/
-│   ├── state.py, graph.py, llm.py, settings.py   # R1
-│   ├── rag/{chunk,embed,index}.py                # R2
-│   ├── rag/retrieve.py                           # R3
-│   ├── tools/{docs,web_search,web_fetch,web_store}.py            # R2/R3
-│   ├── agents/{research,maturity,domain}.py       # R4
-│   ├── agents/{market,stakeholder,stakeholder_contract}.py  # R3
-│   ├── agents/{synthesis,report}.py               # R5
-│   └── output/{validate,reference,pdf}.py         # R5
-├── eval/
-│   ├── goldenset.json          # 검색 평가셋 20문항 (R2)
-│   ├── retrieval_metrics.py    # Hit@K·MRR@K 집계 (R4)
-│   └── find_failed_queries.py  # top-5 실패 질의 목록 (R2)
-├── docs/                    # interface.md 등 팀 계약 문서
-├── config/settings.yaml     # 실행 설정 (R1)
-├── app.py                   # 전체 파이프라인 실행 스크립트
+│   ├── agents/              # Agent 모듈 (research/maturity/market/stakeholder/domain/synthesis/report)
+│   ├── rag/                 # 청킹·임베딩·인덱스·검색
+│   ├── tools/               # 색인 검색, 웹 검색/수집
+│   ├── output/              # 인용 검증, 내용 검토, 참고문헌, PDF 생성
+│   ├── schema.py            # 공용 계약 (Claim/Assessment/Source/Evidence/Gap/Synthesis/Event)
+│   ├── state.py             # State (설계서 §7 표 14행 / 17필드)
+│   └── graph.py             # LangGraph 배선
+├── eval/                    # 검색 품질 평가 (golden set, Hit@K/MRR@K)
+├── reviews/verdicts.json    # 내용 검토 판정 원장 (커밋 대상)
+├── config/settings.yaml     # 실행 설정
+├── runs/                    # run_id별 실행 스냅샷·결과·trace (Git 제외)
+├── app.py                   # 실행 스크립트
 └── README.md
 ```
 
-## 7. 실행
+---
+
+## 실행
 
 ### 0. 준비
 
@@ -407,6 +219,16 @@ PDF 는 **검증을 통과했을 때만** 나온다(§8 — 무효 인용이 남
 | `partial` | 검토 대기로 멈췄거나, 근거 공백이 남은 채 보고서를 냈다 |
 | `failed` | Assessment 중 failed, 미해결 인용 오류, 병합 오류 |
 
+### 모델 설정
+
+`config/settings.yaml` 의 `llm.model` 이 기본값이고 `.env` 의 `LLM_MODEL` 이 우선한다.
+실제로 적용된 `temperature`·`seed`·토큰 사용량은 `runs/<run_id>/run.json` 의 `llm` 에
+기록된다(설정 파일 값과 다를 수 있다 — 아래 재현성 절 참고).
+
+> ⚠️ `gpt-5.6-luna` 가 팀 계정에서 호출되는지, **`with_structured_output`(tool calling)을
+> 지원하는지** 먼저 확인할 것. 미지원이면 `synthesis` 의 구조화 출력이 무너진다.
+> 안 되면 `.env` 에 `LLM_MODEL=gpt-4.1-mini`.
+
 ---
 
 ## 재현성 — 어디까지 되고 어디부터 안 되는가
@@ -415,14 +237,14 @@ PDF 는 **검증을 통과했을 때만** 나온다(§8 — 무효 인용이 남
 
 | 단계 | 재현 |
 |---|---|
-| 원문 → 청킹 → 임베딩 → 인덱스 | ✅ 코퍼스 해시와 임베딩 revision(`src/rag/embed.py`)이 고정돼 있다 |
+| 원문 → 청킹 → 임베딩 → 인덱스 | ✅ 코퍼스 해시와 임베딩 revision 이 고정돼 있다 |
 | 검색 결과 · `chunk_id` | ✅ 같은 인덱스면 동일 |
 | **주장 문장** | ❌ 모델이 매 실행 다시 쓴다 |
 | **이해관계자 근거** | ❌ 매 실행 웹을 새로 검색한다 |
 
 측정값: 같은 코퍼스로 두 번 돌렸을 때 `maturity` 노드가 **인용 근거 5건이 완전히 같은데
 본문 유사도 0.258** 이었다. `langchain_openai` 가 `gpt-5.6-luna` 에 대해 `temperature` 를
-보내지 않고(추론형 모델로 취급) `seed` 도 무시되기 때문이다. 자세한 조사는
+보내지 않고(추론형 모델로 취급) `seed` 도 무시되기 때문이다. 조사 기록은
 [docs/reproducibility-plan.md](docs/reproducibility-plan.md).
 
 **클론한 사람이 같은 결과를 얻을 수 없다.** `data/raw/`(원문)와 `.cache/`(모델 응답
@@ -447,78 +269,39 @@ PDF 는 **검증을 통과했을 때만** 나온다(§8 — 무효 인용이 남
 이해관계자 노드는 매 실행 웹을 새로 조사하므로 **프롬프트가 달라져 캐시가 적중하지 않고,
 그 Claim 들은 매번 새로 검토해야 한다.**
 
-### 모델 설정
-
-`config/settings.yaml` 의 `llm.model` 이 기본값이고 `.env` 의 `LLM_MODEL` 이 우선한다.
-실제로 적용된 `temperature`·`seed` 는 `runs/<run_id>/run.json` 의 `llm` 에 기록된다
-(설정 파일 값과 다를 수 있다 — 위 재현성 절 참고).
-
-> ⚠️ **첫 실행 전 확인**: `gpt-5.6-luna` 가 팀 계정에서 호출되는지, 그리고
-> **`with_structured_output`(tool calling)을 지원하는지**. 미지원이면 `synthesis` 의
-> 구조화 출력이 무너진다. 안 되면 `.env` 에 `LLM_MODEL=gpt-4.1-mini`.
-
 ---
 
-## 8. 담당
-
-| 담당 | 트랙 | 파일 |
-|---|---|---|
-| **R1** | Graph & Runtime | `app.py` · `src/{state,graph,llm,settings}.py` · `src/agents/common.py` · `config/settings.yaml` |
-| **R2** | RAG 인프라 (3 컬렉션) | `sources.json` · `scripts/prepare_sources.py` · `src/rag/{chunk,embed,index}.py` · `scripts/ingest.py` · `eval/goldenset.json` |
-| **R3** | 검색 계층 + 시장성 + 이해관계자 | `src/rag/retrieve.py` · `src/tools/{docs,web_search,web_fetch,web_store}.py` · `src/agents/stakeholder{,_contract}.py` · `sources.json`의 ecosystem·context **자료 선별** |
-| **R4** | 논문 소비 에이전트 + 검색 평가 | `src/agents/{research,maturity,domain}.py` · `eval/retrieval_metrics.py` |
-| **R5** | 종합·보고서·출력 | `src/agents/{synthesis,report}.py` · `src/output/{validate,reference,pdf}.py` · `README.md` |
-
-> `src/settings.py`는 v13 파일 목록에 없는 추가분(R1). R2·R4가 `top_k`·청킹 상수를
-> R1의 `llm.py`를 거쳐 가져오는 역참조를 피하려고 분리했다.
->
-> `eval/goldenset.json`·`eval/retrieval_metrics.py`는 원안엔 R2 단독 소유였지만, 실제로는
-> R4도 자신의 에이전트 평가를 위해 `retrieval_metrics.py`를 다시 작성해 병합했다. 정리:
-> **골든셋 데이터(20문항)는 R2**, **집계·리포트 스크립트는 R4** 버전을 쓴다. R2는 별도로
-> `eval/find_failed_queries.py`(실패 질의 목록)만 추가했다.
-
-### 시작 전 고정할 인터페이스 → [docs/interface.md](docs/interface.md)
-
-1. `src/state.py` 17키의 형식 — **R1**
-2. chunk 스키마와 `search_source_documents(collection 필수)` 시그니처, `sources.json` 의 `scope`·`perspectives` 값 목록 — **R2**
-3. 관점 dict `{text, citations, gaps}` + citation 형식 `chunk_id` — **R1·R5**
-4. **`validation_errors` 형식** `{node, kind, ids}` — **R5**가 쓰고 **R1**이 읽는 유일한 키
-
-1~3만 정하면 R3~R5는 인덱스 완성 전에도 목업 청크로 개발을 시작할 수 있다.
-
----
-
-## 9. Contributors
-
-| 이름 | 담당 | 주요 산출물 |
-|---|---|---|
-| 김민 | Graph & Runtime | State 17키, 공용 schema.py(Claim/Assessment/Source/Evidence/Gap), LangGraph 배선(조건부 보완·fan-out/fan-in·2단계 검증 라우팅), run_id 기반 실행 제어 |
-| 권수진 | RAG 인프라 | 3 컬렉션 재구성(excerpt 페이징), SHA-256·쪽수 매니페스트, 표/수식 깨짐 검토 마킹, 검색 평가셋 |
-| 정승원 | 검색 계층·시장성·이해관계자 | dense 코사인 검색(`retrieve.py`), 역할별 컬렉션/관점 잠금(`ROLE_COLLECTIONS`), 웹 근거 수집·스냅샷(`web_search/web_fetch/web_store`), 이해관계자 평가 노드 |
-| 권예리 | 평가 에이전트 | 기술조사·TRL 규칙표·도메인 노드, 검색 품질 실측 스크립트(`retrieval_metrics.py`) 재작성 |
-| 박인기 | 종합·출력 | _(git 커밋 이력만으로는 R5 구현 여부가 확인되지 않았습니다 — 본인이 직접 채워주세요: 구조 강제 종합, 인용 검증, REFERENCE 3구분, 한글 PDF 등)_ |
-
----
-
-## 10. 보고서 목차 (`output/report.md`)
+## 보고서 목차
 
 ```
-SUMMARY            핵심 평가 결과, ½쪽 이내
+SUMMARY            핵심 평가 결과, ½쪽 이내 (전체 목록은 §5·§6)
 1. 분석 배경
 2. 기술 선정
 3. 기술 개요
 4. 관점별 평가      4.1 TRL  4.2 시장성  4.3 이해관계자  4.4 도메인
-5. 시사점          5.1 일치  5.2 상충  5.3 근거 공백  5.4 결합 가설(추론)
-6. 한계
+5. 시사점          5.1 일치  5.2 차이·상충  5.3 결합 가설(추론)
+6. 한계            근거 공백(관점별) · 조사 시점과 검토 범위 · 분석의 한계
 REFERENCE          [A] Doc Pool 논문  [B] 풀 밖 색인(ecosystem·context)  [C] 웹 조회
 ```
+
+본문 인용은 REFERENCE 번호(`[1]`)로 찍히고, 번호는 제목·arXiv 버전·**인용 페이지**·URL 로
+연결된다(§9). 사실 주장은 본문만 싣고 **추론·가설만** 전제와 함께 표시한다(§6).
 
 **REFERENCE 3구분 이유** — 설계서 §9는 "Doc Pool 논문만"이라 쓰고 §3·§6은 웹 자료도
 인용한다고 쓴다. 그대로 두면 본문 인용이 참고문헌에 연결되지 않는다. [B]는 색인 대상이라
 200쪽 가드에 포함되고, [C]는 색인하지 않으므로 무관하다.
 
-**LLM Judge — 해당 없음.** 인용 검증은 인덱스 실물과 대조하는 결정적 검사이며,
-별도 LLM 채점 점수를 만들지 않는다.
+---
+
+## Contributors
+
+| 이름 | 담당 | 주요 산출물 |
+|---|---|---|
+| 김민 | Graph & Runtime | State(§7 14행/17필드), 공용 `schema.py`, LangGraph 배선, run_id 기반 실행 제어 |
+| 권수진 | RAG 인프라 | 3 컬렉션 구성(excerpt 페이징), SHA-256·쪽수 매니페스트, 표/수식 깨짐 검토 마킹, 검색 평가셋 |
+| 정승원 | 검색 계층·시장성·이해관계자 | dense 코사인 검색, 역할별 컬렉션·관점 잠금, 웹 근거 수집·스냅샷, 이해관계자 평가 노드 |
+| 권예리 | 평가 에이전트 | 기술조사·TRL 규칙표·도메인 노드, 검색 품질 실측 스크립트 |
+| 박인기 | 종합·출력 | 구조 강제 종합, 인용 검증, 내용 검토 worksheet, REFERENCE 3구분, PDF 생성 |
 
 ---
 
