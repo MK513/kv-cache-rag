@@ -67,6 +67,8 @@ def main():
     p.add_argument("--domain", default="데이터센터/클라우드 (대규모 동시성, 비용 민감)")
     p.add_argument("--resume", metavar="RUN_ID", help="검토 대기로 멈춘 실행의 draft.json 을 이어서 돌린다")
     p.add_argument("--run-id", help="run_id 를 직접 지정 (재현용)")
+    p.add_argument("--carry-review", metavar="RUN_ID",
+                   help="이전 실행의 검토 판정을 가져온다. 주장 문장과 근거가 완전히 같은 Claim 만 옮긴다")
     args = p.parse_args()
 
     load_dotenv(override=True)
@@ -79,7 +81,8 @@ def main():
     else:
         state = {"run_id": args.run_id or new_run_id(), "run_status": "running", "trace": [],
                  "run_config": {"domain": args.domain, "model": settings()["llm"],
-                                "limits": settings()["limits"], "started_at": utcnow(), **config}}
+                                "limits": settings()["limits"], "started_at": utcnow(),
+                                "carry_review_from": args.carry_review, **config}}
         start = "setup"
 
     directory = start_run(state)
@@ -97,6 +100,11 @@ def main():
 
     status = finish(final, final.get("run_status", "failed"))
     pending = (final.get("validation") or {}).get("pending_claims") or []
+
+    carried = (final.get("validation") or {}).get("carried_claims") or []
+    if carried:
+        print(f"이전 실행에서 판정을 가져온 Claim {len(carried)}건 "
+              f"(주장·근거가 완전히 같은 것만)")
 
     if final.get("review_status") == "pending":
         # §8 — ID 대조만으로 자동 통과시키지 않는다. 사람이 주장과 근거를 나란히 본다.

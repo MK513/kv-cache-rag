@@ -116,3 +116,34 @@ def test_review_reader_groups_rows_by_claim(state, tmp_path, capsys):
     show("r5-test", runs_dir=tmp_path, width=80)
     assert "확인 · 권예리" in capsys.readouterr().out
     assert show("r5-test", runs_dir=tmp_path, only_pending=True, width=80) == 0
+
+
+def test_verdict_carries_only_when_claim_and_evidence_are_identical(tmp_path):
+    """§8 — 사람이 읽은 것이 그대로일 때만 판정을 옮긴다."""
+    previous = {"run_id": "run-a", "run_config": {"runs_dir": str(tmp_path)},
+                "market": assessment("market")}
+    node.review(previous)
+    fill(tmp_path / "run-a" / "review.csv", "확인")
+
+    same = {"run_id": "run-b", "market": assessment("market"),
+            "run_config": {"runs_dir": str(tmp_path), "carry_review_from": "run-a"}}
+    update = node.review(same)
+
+    assert update["review_status"] == "passed"
+    assert update["validation"]["carried_claims"] == ["claim-market"]
+    assert update["validation"]["claim_verdicts"]["claim-market"]["carried_from"] == "run-a"
+
+
+def test_changed_claim_text_is_reviewed_again(tmp_path):
+    previous = {"run_id": "run-a", "run_config": {"runs_dir": str(tmp_path)},
+                "market": assessment("market")}
+    node.review(previous)
+    fill(tmp_path / "run-a" / "review.csv", "확인")
+
+    changed = assessment("market")
+    changed["claims"][0]["text"] = "market 주장 (문장이 바뀌었다)"
+    update = node.review({"run_id": "run-c", "market": changed,
+                          "run_config": {"runs_dir": str(tmp_path), "carry_review_from": "run-a"}})
+
+    assert update["review_status"] == "pending"
+    assert update["validation"]["carried_claims"] == []

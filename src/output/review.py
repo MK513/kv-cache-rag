@@ -18,6 +18,7 @@ review_result와 reviewer는 사람이 직접 입력한다.
 """
 
 import csv
+import hashlib
 from pathlib import Path
 
 from src.output import validate
@@ -116,6 +117,7 @@ def build_review_rows(state: dict) -> list[dict]:
                     "review_result": "",
                     "reviewer": "",
                     "review_comment": "",
+                    "carried_from": "",
                 })
                 continue
 
@@ -141,17 +143,75 @@ def build_review_rows(state: dict) -> list[dict]:
                     "review_result": "",
                     "reviewer": "",
                     "review_comment": "",
+                    "carried_from": "",
                 })
 
     return rows
 
 
-def write_review_csv(state: dict, output_path: str | Path) -> Path:
-    """Human review용 CSV 파일을 생성한다."""
+def group_by_claim(rows: list[dict]) -> dict[str, list[dict]]:
+    """한 Claim 은 근거 수만큼 행을 갖는다."""
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        grouped.setdefault(row["claim_id"], []).append(row)
+    return grouped
+
+
+def claim_fingerprint(rows: list[dict]) -> str:
+    """사람이 실제로 읽은 것 — 주장 문장과 근거 집합 — 의 지문.
+
+    claim_id 로는 안 된다. R4 의 claim_id 는 날짜만 담아서 같은 날 다른 내용이 같은 ID 를
+    갖는다. 이월이 안전하려면 화면에 뜬 글자가 그대로여야 한다.
+    """
+    head = rows[0]
+    payload = "|".join([
+        head.get("node", ""), head.get("technology", ""), head.get("claim_kind", ""),
+        " ".join((head.get("claim_text") or "").split()),
+        ",".join(sorted(r["evidence_id"] for r in rows if r.get("evidence_id"))),
+    ])
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def carry_verdicts(rows: list[dict], previous_csv: Path, previous_run: str) -> list[str]:
+    """이전 실행의 판정을 **주장과 근거가 완전히 같은** Claim 에만 옮긴다(설계서 §8).
+
+    문장이 한 글자라도 바뀌었으면 사람이 읽은 것이 아니므로 옮기지 않는다. 코퍼스가
+    같아도 매 실행 LLM 이 주장을 다시 쓰고, 웹 근거는 매번 새로 수집된다.
+    """
+    previous_csv = Path(previous_csv)
+    if not previous_csv.exists():
+        return []
+
+    judged = {}
+    for group in group_by_claim(
+            list(csv.DictReader(previous_csv.open(encoding="utf-8-sig")))).values():
+        verdict = next((r for r in group if (r.get("review_result") or "").strip()), None)
+        if verdict:
+            judged[claim_fingerprint(group)] = verdict
+
+    carried = []
+    for claim_id, group in group_by_claim(rows).items():
+        source = judged.get(claim_fingerprint(group))
+        if not source:
+            continue
+        group[0].update(
+            review_result=source["review_result"],
+            reviewer=source.get("reviewer", ""),
+            review_comment=source.get("review_comment", ""),
+            carried_from=source.get("carried_from") or previous_run,
+        )
+        carried.append(claim_id)
+    return carried
+
+
+def write_review_csv(state: dict, output_path: str | Path, *, carry_from: Path | None = None,
+                     carry_run: str = "") -> tuple[Path, list[str]]:
+    """Human review용 CSV 파일을 생성한다. carry_from 이 있으면 같은 Claim 의 판정을 옮긴다."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     rows = build_review_rows(state)
+    carried = carry_verdicts(rows, carry_from, carry_run) if carry_from else []
 
     fieldnames = [
         "claim_id",
@@ -167,6 +227,7 @@ def write_review_csv(state: dict, output_path: str | Path) -> Path:
         "review_result",
         "reviewer",
         "review_comment",
+        "carried_from",
     ]
 
     with output_path.open(
@@ -178,7 +239,7 @@ def write_review_csv(state: dict, output_path: str | Path) -> Path:
         writer.writeheader()
         writer.writerows(rows)
 
-    return output_path
+    return output_path, carried
 
 APPROVED = {"확인", "통과", "승인", "ok", "pass", "approved"}
 REJECTED = {"부결", "반려", "reject", "rejected", "fail"}
@@ -208,6 +269,7 @@ def read_verdicts(path: str | Path) -> dict[str, dict]:
                            "부결" if lowered in REJECTED else "미상",
                 "reviewer": (row.get("reviewer") or "").strip(),
                 "comment": (row.get("review_comment") or "").strip(),
+                "carried_from": (row.get("carried_from") or "").strip(),
             }
     return verdicts
 
@@ -232,11 +294,17 @@ def review(state) -> dict:
     checked = validate.check(state)
     validation = dict(checked["validation"])
 
+    config = state.get("run_config") or {}
     path = run_dir(state) / "review.csv"
+    carried = []
     if not path.exists():
         # ponytail: 초안이 재작성되면 worksheet 가 낡는다. 판정을 지우지 않으려고
         #           덮어쓰지 않는다. 재작성이 잦아지면 claim_id 기준 병합으로 바꾼다.
-        write_review_csv(state, path)
+        previous = config.get("carry_review_from")
+        _, carried = write_review_csv(
+            state, path,
+            carry_from=Path(config.get("runs_dir", "runs")) / previous / "review.csv" if previous else None,
+            carry_run=previous or "")
 
     verdicts = read_verdicts(path)
     claim_ids = _claim_ids(state)
@@ -251,6 +319,8 @@ def review(state) -> dict:
         # §8 — 근거를 확보하지 못한 주장은 사실 서술에서 제외한다. report 가 이 목록을 뺀다.
         "rejected_claims": rejected,
         "reviewers": sorted({v["reviewer"] for v in verdicts.values() if v["reviewer"]}),
+        # 이월된 판정은 사람이 이번 실행에서 다시 본 것이 아니다. 어디서 왔는지 남긴다(§8).
+        "carried_claims": sorted({cid for cid, v in verdicts.items() if v["carried_from"]}) or carried,
     }
     if unclear:
         validation["errors"] = list(validation.get("errors") or []) + [
