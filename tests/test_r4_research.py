@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from src.schema import Assessment
 from src.agents import research as agent
 
 TQ_ID = "aaaaaaaaaaaa"
@@ -150,11 +151,11 @@ def test_supplemental_search_runs_once_when_a_technology_is_entirely_unretrieved
     assert out["research"]["status"] == "completed"
 
 
-def test_fallback_claim_crashes_when_llm_skips_numbered_sections(monkeypatch):
-    """알려진 결함: 본문이 '1. TurboQuant/2. ITME' 절 구분을 안 지키면
-    폴백이 technology="both" 로 Claim 을 만드는데, schema.Technology 는
-    TurboQuant/ITME 만 허용해 항상 pydantic.ValidationError 로 죽는다.
-    R4 가 고쳐야 할 실결함이며, 회귀 확인용으로 여기 고정해 둔다.
+def test_fallback_claim_covers_both_technologies(monkeypatch):
+    """절 구분이 없으면 두 기술을 함께 다루는 Claim 하나로 낸다.
+
+    schema.Technology 가 "both" 를 허용한다 — §3 검색 도구 계약이 이미 쓰는 값이다.
+    (이전에는 TurboQuant/ITME 두 값뿐이라 폴백이 항상 ValidationError 로 죽었다.)
     """
     tq = chunk(TQ_ID, applies_to=["TurboQuant"])
     itme = chunk(ITME_ID, applies_to=["ITME"])
@@ -163,5 +164,8 @@ def test_fallback_claim_crashes_when_llm_skips_numbered_sections(monkeypatch):
     monkeypatch.setattr(agent, "run_node", stub_llm(
         f"TurboQuant 와 ITME 를 개괄한다 [{TQ_ID}][{ITME_ID}].\n근거 공백: 없음"))
 
-    with pytest.raises(ValidationError):
-        agent.research(STATE)
+    assessment = Assessment.model_validate(agent.research(STATE)["research"])
+
+    assert [c.technology for c in assessment.claims] == ["both"]
+    assert set(assessment.claims[0].evidence_ids) == {TQ_ID, ITME_ID}
+
