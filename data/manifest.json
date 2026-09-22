@@ -1,0 +1,273 @@
+{
+  "generated_at": "2026-09-22",
+  "chars_per_page_a4_95pt": 3200,
+  "page_budget": 200,
+  "total_pages": 125.4,
+  "within_budget": true,
+  "pages_by_collection": {
+    "papers_core": 70,
+    "ecosystem": 15.4,
+    "context": 40
+  },
+  "source_count": 10,
+  "failures": [],
+  "sources": [
+    {
+      "id": "turboquant-paper",
+      "collection": "papers_core",
+      "title": "TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate",
+      "url": "https://arxiv.org/pdf/2504.19874",
+      "type": "pdf",
+      "language": "en",
+      "applies_to": [
+        "TurboQuant"
+      ],
+      "perspectives": [
+        "research",
+        "maturity",
+        "domain"
+      ],
+      "scope": "direct",
+      "local_path": "data/raw/turboquant-paper.pdf",
+      "sha256": "431eb13926e10491f5fbd0bebd0813c51bd6c1e884426a1500c5db640b2997ab",
+      "bytes": 861881,
+      "retrieved_at": "2026-09-22",
+      "version": "arXiv:2504.19874 (2025-04)",
+      "landing": "https://arxiv.org/abs/2504.19874",
+      "pdf_pages": 25,
+      "pages_counted": 25,
+      "page_basis": "pdf_actual"
+    },
+    {
+      "id": "itme-paper",
+      "collection": "papers_core",
+      "title": "ITME: Inference Tiered Memory Expansion with Disaggregated CXL-Hybrid Memories",
+      "url": "https://arxiv.org/pdf/2606.12556",
+      "type": "pdf",
+      "language": "en",
+      "applies_to": [
+        "ITME"
+      ],
+      "perspectives": [
+        "research",
+        "maturity",
+        "domain"
+      ],
+      "scope": "direct",
+      "local_path": "data/raw/itme-paper.pdf",
+      "sha256": "c8f29ee52bfaef00bd2b26bf2e71e49eda394d6e85b7fc9975fa5fd9a24a94d7",
+      "bytes": 2879868,
+      "retrieved_at": "2026-09-22",
+      "version": "arXiv:2606.12556v2 (2026-06)",
+      "landing": "https://arxiv.org/abs/2606.12556",
+      "pdf_pages": 13,
+      "pages_counted": 13,
+      "page_basis": "pdf_actual"
+    },
+    {
+      "id": "infinigen-paper",
+      "collection": "papers_core",
+      "title": "InfiniGen: Efficient Generative Inference of LLMs with Dynamic KV Cache Management",
+      "url": "https://www.usenix.org/system/files/osdi24-lee.pdf",
+      "type": "pdf",
+      "language": "en",
+      "applies_to": [
+        "ITME"
+      ],
+      "perspectives": [
+        "maturity",
+        "domain"
+      ],
+      "scope": "comparison",
+      "local_path": "data/raw/infinigen-paper.pdf",
+      "sha256": "638e3f536447ce7fbfed1b485654620629a4e34fbd250db74018b8a880c4f029",
+      "bytes": 3212724,
+      "retrieved_at": "2026-09-22",
+      "version": "OSDI 2024 (2024-06)",
+      "landing": "https://www.usenix.org/conference/osdi24/presentation/lee",
+      "note": "Doc Pool 비교군. 새 하드웨어 없이 호스트 메모리로 오프로딩하는 접근.",
+      "pdf_pages": 19,
+      "pages_counted": 19,
+      "page_basis": "pdf_actual"
+    },
+    {
+      "id": "pim-cxl-paper",
+      "collection": "papers_core",
+      "title": "Scalable Processing-Near-Memory for 1M-Token LLM Inference: CXL-Enabled KV-Cache Management",
+      "url": "https://arxiv.org/pdf/2511.00321",
+      "type": "pdf",
+      "language": "en",
+      "applies_to": [
+        "ITME"
+      ],
+      "perspectives": [
+        "maturity",
+        "domain"
+      ],
+      "scope": "comparison",
+      "local_path": "data/raw/pim-cxl-paper.pdf",
+      "sha256": "794adce50555cc340e9067e927d1822e4c6d3eff0ae39e2c87baa94f787d1061",
+      "bytes": 4268478,
+      "retrieved_at": "2026-09-22",
+      "version": "arXiv:2511.00321 (2025-10)",
+      "landing": "https://arxiv.org/abs/2511.00321",
+      "note": "Doc Pool 비교군. 연산을 메모리 쪽으로 옮기는 접근.",
+      "pdf_pages": 13,
+      "pages_counted": 13,
+      "page_basis": "pdf_actual"
+    },
+    {
+      "id": "turboquant-blog",
+      "collection": "ecosystem",
+      "title": "TurboQuant: Redefining AI efficiency with extreme compression",
+      "url": "https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/",
+      "type": "web",
+      "language": "en",
+      "applies_to": [
+        "TurboQuant"
+      ],
+      "perspectives": [
+        "market"
+      ],
+      "scope": "direct",
+      "local_path": "data/raw/turboquant-blog.html",
+      "sha256": "6cc6f3486084e5c78be53315ddb4a4f9ab5389eb21b4075ea295254ea6cb99e7",
+      "bytes": 186857,
+      "retrieved_at": "2026-09-22",
+      "publisher": "Google Research Blog",
+      "note": "저자 측 1차 공식 발표. arXiv 원문에 공식 코드 저장소 링크가 없어 이 글을 1차 출처로 사용.",
+      "text_path": "data/raw/turboquant-blog.txt",
+      "chars": 11601,
+      "pages_counted": 3.6,
+      "page_basis": "a4_9.5pt_equiv@3200chars"
+    },
+    {
+      "id": "cxl-whitepaper",
+      "collection": "ecosystem",
+      "title": "Compute Express Link 3.0 White Paper",
+      "url": "https://computeexpresslink.org/wp-content/uploads/2023/12/CXL_3.0_white-paper_FINAL.pdf",
+      "type": "pdf",
+      "language": "en",
+      "applies_to": [
+        "ITME"
+      ],
+      "perspectives": [
+        "market"
+      ],
+      "scope": "ecosystem",
+      "local_path": "data/raw/cxl-whitepaper.pdf",
+      "sha256": "d8d8ba0e7cb27833ef0e718d8628ccd2693ffda2d44884da24e4fe25a560a2b6",
+      "bytes": 732680,
+      "retrieved_at": "2026-09-22",
+      "publisher": "CXL Consortium",
+      "note": "표준화 동향 근거. 전체 규격서는 분량 때문에 의도적으로 배제하고 백서만 사용.",
+      "pdf_pages": 4,
+      "pages_counted": 4,
+      "page_basis": "pdf_actual"
+    },
+    {
+      "id": "vllm-quantized-kvcache",
+      "collection": "ecosystem",
+      "title": "Quantized KV Cache (vLLM docs)",
+      "url": "https://docs.vllm.ai/en/latest/features/quantization/quantized_kvcache/",
+      "type": "web",
+      "language": "en",
+      "applies_to": [
+        "TurboQuant"
+      ],
+      "perspectives": [
+        "market"
+      ],
+      "scope": "ecosystem",
+      "local_path": "data/raw/vllm-quantized-kvcache.html",
+      "sha256": "c6cab403bc0a796df43fe0d303cb4c2a8002b681a5cdfd15fe5322365a595ebc",
+      "bytes": 705036,
+      "retrieved_at": "2026-09-22",
+      "publisher": "vLLM",
+      "note": "프레임워크 지원 현황. TurboQuant의 직접 채택이 아닌 인접 생태계 자료.",
+      "text_path": "data/raw/vllm-quantized-kvcache.txt",
+      "chars": 6298,
+      "pages_counted": 2.0,
+      "page_basis": "a4_9.5pt_equiv@3200chars"
+    },
+    {
+      "id": "vllm-prefix-caching",
+      "collection": "ecosystem",
+      "title": "Automatic Prefix Caching (vLLM design docs)",
+      "url": "https://docs.vllm.ai/en/stable/design/prefix_caching/",
+      "type": "web",
+      "language": "en",
+      "applies_to": [
+        "ITME"
+      ],
+      "perspectives": [
+        "market"
+      ],
+      "scope": "ecosystem",
+      "local_path": "data/raw/vllm-prefix-caching.html",
+      "sha256": "9cd5f7c46bdcd094166c40376f4566f1fe6305b9f7db76ddea5162fe169666e7",
+      "bytes": 678378,
+      "retrieved_at": "2026-09-22",
+      "publisher": "vLLM",
+      "note": "KV cache 재사용·계층화 관련 프레임워크 설계. 직접 채택 아님.",
+      "text_path": "data/raw/vllm-prefix-caching.txt",
+      "chars": 13098,
+      "pages_counted": 4.1,
+      "page_basis": "a4_9.5pt_equiv@3200chars"
+    },
+    {
+      "id": "skhynix-cmm-validation",
+      "collection": "ecosystem",
+      "title": "SK hynix Completes Customer Validation of CXL 2.0-based DDR5",
+      "url": "https://news.skhynix.com/en/sk-hynix-completes-customer-validation-of-cxl-based-ddr5/",
+      "type": "web",
+      "language": "en",
+      "applies_to": [
+        "ITME"
+      ],
+      "perspectives": [
+        "market",
+        "stakeholder"
+      ],
+      "scope": "ecosystem",
+      "local_path": "data/raw/skhynix-cmm-validation.html",
+      "sha256": "b8a7e9124bd84dbacf46c41087b41f681b59bfd932bdb3b8a314a85e11e82060",
+      "bytes": 144299,
+      "retrieved_at": "2026-09-22",
+      "publisher": "SK hynix Newsroom",
+      "published_at": "2025-04-23",
+      "note": "ITME 저자 소속 벤더의 제품 검증 발표. CXL 제품 일반의 상용화 근거이며 ITME 아키텍처 채택 근거가 아님.",
+      "text_path": "data/raw/skhynix-cmm-validation.txt",
+      "chars": 5357,
+      "pages_counted": 1.7,
+      "page_basis": "a4_9.5pt_equiv@3200chars"
+    },
+    {
+      "id": "kv-cache-survey",
+      "collection": "context",
+      "title": "A Survey on Large Language Model Acceleration based on KV Cache Management",
+      "url": "https://arxiv.org/pdf/2412.19442",
+      "type": "pdf",
+      "language": "en",
+      "applies_to": [
+        "TurboQuant",
+        "ITME"
+      ],
+      "perspectives": [
+        "domain"
+      ],
+      "scope": "secondary",
+      "local_path": "data/raw/kv-cache-survey.pdf",
+      "sha256": "26d5f52976a383a84f590fa1dab94c75254452fe91133e42540ae306f786db9b",
+      "bytes": 1813790,
+      "retrieved_at": "2026-09-22",
+      "version": "arXiv:2412.19442v3 (2025-07)",
+      "landing": "https://arxiv.org/abs/2412.19442",
+      "note": "2차 자료. 분류 체계 장만 발췌해 도메인 맥락에 사용하고 성능 주장 근거로 인용하지 않는다.",
+      "excerpt_only": true,
+      "pdf_pages": 40,
+      "pages_counted": 40,
+      "page_basis": "pdf_actual"
+    }
+  ]
+}

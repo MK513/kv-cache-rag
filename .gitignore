@@ -6,6 +6,26 @@ data/raw/
 # --- 인덱스 / 중간 산출물 ----------------------------------------------------
 data/chunks/
 data/index/
+*.faiss
+*.pkl
+# 모델·임베딩 캐시 (HuggingFace, CacheBackedEmbeddings)
+.cache/
+models/
+# data/web_cache/ 는 제외하지 않는다 — 이해관계자 웹 조회 스냅샷은 재현성을 위해 커밋한다.
+
+# --- 비밀 ---------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# --- 생성 산출물 --------------------------------------------------------------
+# 제출본은 예외적으로 강제 추가한다:  git add -f output/RAG-Output_*.pdf
+output/*.md
+output/*.pdf
+output/*.jsonl
+*.log
 
 # --- Python ------------------------------------------------------------------
 __pycache__/
@@ -14,6 +34,9 @@ __pycache__/
 venv/
 *.egg-info/
 .ipynb_checkpoints/
+.coverage
+htmlcov/
+# uv.lock 은 재현성을 위해 커밋한다 — 무시하지 않는다.
 
 # --- 도구 / 에디터 -----------------------------------------------------------
 .ruff_cache/
@@ -21,6 +44,8 @@ venv/
 .pytest_cache/
 .vscode/
 .idea/
+*.swp
+.claude/settings.local.json
 
 # --- OS ----------------------------------------------------------------------
 .DS_Store

@@ -1,0 +1,29 @@
+{
+  "_readme": [
+    "담당: R4 — 설계서 §4 평가셋. 20문항, 두 기술에 균등 배분(각 10).",
+    "fact_id 는 같은 사실의 한/영 쌍을 묶는다 — '완전 회수율'(ko·en 모두 회수) 계산용.",
+    "반드시 원문에서 페이지를 직접 확인하고 채울 것. 확인 안 한 문항은 넣지 않는다.",
+    "주의: ko/en × dense/rrf 로 나누면 셀당 n=10 이다. metrics 가 n<12 면 경고를 낸다.",
+    "      dense vs RRF 비교를 주장하려면 24~30문항으로 늘리는 편이 안전하다."
+  ],
+  "items": [
+    {
+      "id": "tq-01-ko",
+      "fact_id": "tq-01",
+      "lang": "ko",
+      "technology": "TurboQuant",
+      "question": "TODO: 원문에서 확인한 사실을 한국어 질의로",
+      "gold_source": "turboquant",
+      "gold_page": 0
+    },
+    {
+      "id": "tq-01-en",
+      "fact_id": "tq-01",
+      "lang": "en",
+      "technology": "TurboQuant",
+      "question": "TODO: same fact, English query",
+      "gold_source": "turboquant",
+      "gold_page": 0
+    }
+  ]
+}

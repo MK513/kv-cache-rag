@@ -1,0 +1,33 @@
+[project]
+name = "kv-cache-rag"
+version = "0.1.0"
+description = "KV cache 최적화 기술 다관점 평가 — LangGraph Multi-Agent + Agentic RAG"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=1.0.1",
+    "langchain>=1.0.2",
+    "langchain-openai>=1.0.1",
+    "langchain-community>=0.3.31",
+    "langchain-huggingface>=0.3",   # multilingual-e5-small
+    "langchain-tavily>=0.2.12",     # 시장/이해관계자 웹 조사
+    "sentence-transformers>=5.1.1",
+    "faiss-cpu>=1.12.0",
+    "rank-bm25>=0.2.2",             # EnsembleRetriever(RRF) 의 sparse 축
+    "pdfplumber>=0.11.8",           # 페이지 메타데이터 + 표 추출
+    "requests>=2.32",               # scripts/prepare_sources.py
+    "pypdf>=5.1",                   # 매니페스트 페이지 수
+    "beautifulsoup4>=4.12",         # 웹 본문 추출
+    "lxml>=5.2",                    # bs4 파서
+    "pyyaml>=6",
+    "transformers>=4.57",        # 토큰 기준 청킹용 토크나이저
+    "python-dotenv>=1.2.1",
+]
+
+[project.optional-dependencies]
+# PDF 변환은 시스템 라이브러리(pango)가 필요해 기본 설치에서 뺀다.
+# 없어도 파이프라인은 report.md 까지 정상 종료한다.  uv sync --extra pdf
+pdf = ["markdown>=3.6", "weasyprint>=62"]
+
+[tool.uv]
+package = false
