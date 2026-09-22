@@ -115,12 +115,19 @@ def main():
         print(f"검토 대기 — Claim {len(pending)}건. {directory/'review.csv'} 의 "
               f"review_result(확인|부결)·reviewer 를 채운 뒤\n"
               f"  uv run python app.py --resume {state['run_id']}")
+    elif status == "failed":
+        print(f"실패: {directory/'run.json'} 확인")
     else:
-        print({
-            "completed": f"완료: {final.get('report_paths') or directory}",
-            "partial": f"부분 완료 — 평가 보류 항목이 남았다. 보고서: {final.get('report_paths') or directory}",
-            "failed": f"실패: {directory/'run.json'} 확인",
-        }[status])
+        # run_status 는 §7 정의를 따라 partial 로 남는다. 사람에게는 "보고서가 나왔고
+        # 평가 보류가 몇 건 있다" 가 읽을 값이라 그렇게 적는다.
+        print("완료")
+        for path in final.get("report_paths") or [directory]:
+            print(f"  {path}")
+        gaps = final.get("gaps") or []
+        if gaps:
+            print(f"  평가 보류 {len(gaps)}건 — 보고서 §6 한계 참고 (run_status={status})")
+        if not any(str(p).endswith(".pdf") for p in final.get("report_paths") or []):
+            print(f"  제출본 PDF 미생성 — 사유는 {directory/'submission.json'}")
     return status
 
 
