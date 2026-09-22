@@ -11,7 +11,6 @@ import json
 from pathlib import Path
 
 import pdfplumber
-from langchain_community.retrievers import BM25Retriever
 from langchain_community.vectorstores import FAISS
 
 from src.rag import chunk as chunker
@@ -78,14 +77,13 @@ def build() -> dict:
         print(f"[index] {e['collection']}/{e['id']}: "
               f"{e.get('pages_counted','?')}쪽 / 청크 {len(chunks)}개")
 
-    embeddings, top_k = get_embeddings(), settings()["retrieval"]["top_k"]
+    embeddings = get_embeddings()
     stores = {}
     for collection, docs in docs_by_col.items():
         if not docs:
             continue
-        bm25 = BM25Retriever.from_documents(docs)
-        bm25.k = top_k * 2          # RRF 융합 전이라 넉넉히 뽑는다
-        stores[collection] = {"dense": FAISS.from_documents(docs, embeddings), "bm25": bm25}
+        # R3 contract: dense only until retrieval failure analysis justifies BM25.
+        stores[collection] = {"dense": FAISS.from_documents(docs, embeddings)}
 
     for n in notes:
         print(f"[index] ⚠ {n}")

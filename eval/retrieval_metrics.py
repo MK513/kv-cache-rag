@@ -28,7 +28,7 @@ GOLDEN = Path("eval/goldenset.json")
 OUTPUT_JSON = Path("eval/retrieval_results.json")
 KS = (1, 3, 5)
 MIN_N = 12  # 서브셋당 표본 수가 이보다 적으면 경향성 경고 표시
-MODES = ("dense", "rrf")
+MODES = ("dense",)  # 단일 튜플 유지 (콤마 필수)
 
 
 def rank_of(item: Dict[str, Any], mode: str) -> Optional[int]:
