@@ -1,53 +1,102 @@
 """보고서 생성 — 담당: R5 | 결정적 포맷터
 
-SUMMARY 만 LLM 으로 요약하고 나머지는 State 를 목차에 끼워 넣는다.
-인용 검증은 output/validate.py 가 이미 끝낸 상태로 들어온다(판단 LLM 재호출 없음).
-결합 가설은 §4 본문이 아니라 §5 시사점에만 배치한다.
+추가 판단 LLM을 호출하지 않고, 이미 확정된 State 내용을
+설계서 §9 목차에 맞춰 조립한다.
+
+원칙:
+- SUMMARY도 synthesis 결과만 사용해 결정적으로 생성한다.
+- 결합 가설은 §4 본문이 아니라 §5 시사점에만 배치한다.
+- conflicts는 실제로 존재할 때만 출력한다.
+- 최종 REFERENCE는 reference.py가 실제 사용 근거를 기준으로 생성한다.
 """
 
-from langchain_core.output_parsers import StrOutputParser
-
-from src.llm import get_llm, model_name
+from src.llm import model_name
 from src.output import reference
-
-SUMMARY_PROMPT = """아래 종합 결과를 1/2쪽 이내로 요약하라.
-개요가 아니라 **핵심 평가 결과** 를 쓴다. 우열을 판정하지 않고, 관점에 따라
-평가가 어떻게 갈리는지를 중심으로 쓴다.
-
-일치: {agreements}
-상충: {conflicts}
-공백: {gaps}
-"""
 
 
 def _bullets(items) -> str:
-    return "\n".join(f"- {i}" for i in items) if items else "- 해당 없음"
+    """문자열 목록을 Markdown bullet로 변환한다."""
+    return "\n".join(f"- {item}" for item in items) if items else "- 해당 없음"
 
 
 def _status(tech_status: dict) -> str:
+    """근거 미확보로 평가 보류된 기술이 있으면 경고 문구를 만든다."""
     if not tech_status or all(v == "ok" for v in tech_status.values()):
         return ""
-    held = [t for t, v in tech_status.items() if v != "ok"]
-    return f"\n> ⚠️ 원문 근거를 확보하지 못해 **평가 보류** 로 남긴 기술: {', '.join(held)}\n"
+
+    held = [
+        tech
+        for tech, status in tech_status.items()
+        if status != "ok"
+    ]
+
+    return (
+        "\n> ⚠️ 원문 근거를 확보하지 못해 "
+        f"**평가 보류**로 남긴 기술: {', '.join(held)}\n"
+    )
+
+
+def _summary(synthesis: dict) -> str:
+    """LLM 없이 synthesis의 확정 결과만 사용해 SUMMARY를 생성한다."""
+    parts = []
+
+    agreements = synthesis.get("agreements") or []
+    conflicts = synthesis.get("conflicts") or []
+    gaps = synthesis.get("gaps") or []
+
+    if agreements:
+        parts.append(
+            "네 관점에서 공통적으로 확인된 사항은 다음과 같다.\n"
+            + _bullets(agreements)
+        )
+
+    if conflicts:
+        conflict_lines = [
+            f"**{conflict['perspective']}** — {conflict['why']}"
+            for conflict in conflicts
+        ]
+
+        parts.append(
+            "관점별 평가가 실제로 달라진 지점은 다음과 같다.\n"
+            + _bullets(conflict_lines)
+        )
+
+    if gaps:
+        parts.append(
+            "평가 과정에서 확인된 주요 근거 공백은 다음과 같다.\n"
+            + _bullets(gaps)
+        )
+
+    if not parts:
+        return "확정된 종합 평가 결과가 없다."
+
+    return "\n\n".join(parts)
+
+
+def _conflicts(conflicts: list[dict]) -> str:
+    """관점별 차이를 Markdown으로 변환한다."""
+    if not conflicts:
+        return "- 확인된 관점 간 상충 없음"
+
+    return "\n".join(
+        f"- **{conflict['perspective']}** — {conflict['why']}"
+        for conflict in conflicts
+    )
 
 
 def report(state) -> dict:
-    s = state["synthesis"]
-    summary = (get_llm() | StrOutputParser()).invoke(SUMMARY_PROMPT.format(
-        agreements=s["agreements"],
-        conflicts=[f"{c['perspective']}: {c['why']}" for c in s["conflicts"]],
-        gaps=s["gaps"],
-    ))
+    """검증된 State를 최종 Markdown 보고서로 조립한다."""
+    synthesis = state["synthesis"]
 
-    conflicts = "\n".join(
-        f"- **{c['perspective']}** — 근거가 상대적으로 유리하게 읽히는 쪽: {c['favors']}\n  {c['why']}"
-        for c in s["conflicts"]
+    summary = _summary(synthesis)
+    conflicts = _conflicts(
+        synthesis.get("conflicts") or []
     )
 
     md = f"""# KV cache 최적화 기술 다관점 평가
 
-**대상 기술** TurboQuant (SW 압축) · ITME (HW 메모리 확장)
-**적용 도메인** {state['domain']}
+**대상 기술** TurboQuant (SW 압축) · ITME (HW 메모리 확장)  
+**적용 도메인** {state['domain']}  
 **생성 모델** {model_name()}
 {_status(state.get('tech_status', {}))}
 ## SUMMARY
@@ -56,24 +105,27 @@ def report(state) -> dict:
 
 ## 1. 분석 배경
 
-KV cache 는 재계산 낭비를 없애는 장치이지만, 문맥이 길어질수록 Key·Value 텐서가
-토큰 수에 비례해 증가해 가속기 HBM 을 소진시킨다. 연산 병목이 메모리 병목으로 옮겨간 것이다.
-SW 진영은 데이터를 작게 만들고(양자화·압축), HW 진영은 담을 공간을 넓힌다(메모리 계층 확장).
-본 보고서는 두 접근이 TRL·시장성·이해관계자·도메인 네 관점에서 어떻게 다르게
-평가되는지, 관점 간 근거가 어디서 일치하고 어디서 상충하는지를 정리한다.
+KV cache는 재계산 낭비를 줄이는 장치이지만, 문맥이 길어질수록 Key·Value 텐서가
+토큰 수에 비례해 증가해 가속기 HBM을 소진시킨다. 연산 병목이 메모리 병목으로
+이동하는 구조다.
+
+본 보고서는 KV cache 데이터 축소 접근인 TurboQuant와 메모리 계층 확장 접근인
+ITME를 대상으로, TRL·시장성·이해관계자·도메인 네 관점에서 평가한다.
+두 기술의 개별 근거를 우선 검토하며, 동일 시스템에서 두 기술을 결합했을 때의
+효과는 공개 실측 자료가 확인되지 않는 한 가설로 분리한다.
 
 ## 2. 기술 선정
 
-데이터센터/클라우드(대규모 동시성·비용 민감) 도메인을 먼저 확정한 뒤, 이 도메인을
-원 논문이 직접 타깃으로 명시한 기술을 SW·HW 각 1건씩 Doc Pool 안에서 선정했다.
+데이터센터/클라우드 도메인을 먼저 확정한 뒤, 동일한 KV cache 메모리 병목에
+서로 다른 시스템 계층에서 접근하는 기술을 각각 선정했다.
 
-| 진영 | 기술 | 선정 이유 |
+| 접근 | 기술 | 선정 이유 |
 |---|---|---|
-| SW | TurboQuant | KV cache 양자화로 저장량을 줄여 메모리 용량 제약 완화 가능성 평가 |
-| HW | ITME | CXL-Hybrid 계층적 메모리 확장으로 용량·데이터 이동 문제 접근 |
+| KV cache 데이터 축소 | TurboQuant | KV cache 양자화를 통해 저장량과 메모리 사용량을 줄이는 접근 |
+| 메모리 계층 확장 | ITME | CXL-Hybrid 기반 계층적 메모리 확장으로 용량과 데이터 이동 문제에 접근 |
 
-두 기술은 상호 배타적 대안이 아니라 서로 다른 시스템 계층에서 동일 병목에
-접근하는 기술로 다룬다. 결합 효과는 §5.4 의 가설로만 다룬다.
+두 기술은 상호 배타적인 대안으로 가정하지 않는다. 결합 효과는 §5.4의 가설로만
+다룬다.
 
 ## 3. 기술 개요
 
@@ -101,35 +153,44 @@ SW 진영은 데이터를 작게 만들고(양자화·압축), HW 진영은 담�
 
 ### 5.1 관점 간 일치
 
-{_bullets(s['agreements'])}
+{_bullets(synthesis.get('agreements') or [])}
 
-### 5.2 관점 간 상충
+### 5.2 관점 간 차이 및 상충
 
 {conflicts}
 
 ### 5.3 근거 공백 (gaps)
 
-{_bullets(s['gaps'])}
+{_bullets(synthesis.get('gaps') or [])}
 
 ### 5.4 결합 가설 (추론 — 실측 근거 아님)
 
-{s.get('combination_hypothesis', '해당 없음')}
+{synthesis.get('combination_hypothesis', '해당 없음')}
 
 ## 6. 한계
 
-- 공개된 논문·백서·사례 자료에 기반하며 자체 실측 벤치마크가 아니다.
-- TRL·시장성·이해관계자 평가는 논문 발표 시점과 실제 채택 시점의 시차를 반영하지
-  못한 공개 정보 기반 추정이며, 최신 상용 배치 현황과 다를 수 있다.
-- TurboQuant 와 ITME 의 결합 효과는 추론이며, 동일 시스템에서 함께 측정된 공개
-  자료가 확인되지 않는 한 §5.3 의 gaps 로 남긴다.
-- ITME 는 2026-06 공개된 최신 연구로 TRL 근거의 절대적 수준이 낮을 수 있다.
-  CXL 표준 자체 / CXL 상용 제품 / ITME 구체 아키텍처의 성숙도를 분리해 다루었다.
-- GPU 벤치마크 수치는 원 논문의 보고값이며 본 프로젝트가 직접 측정한 성능이 아니다.
-- 인용 검증은 인용 ID 가 색인 원문에 실재하는지에 대한 결정적 검사이며, 문장 내용이
-  그 근거에서 따라 나오는지까지 증명하지 않는다.
-- 확증 편향 방지 조치: 기술별 검색량 균형, 잔여 비용·근거 공백 동시 보고,
-  시장 근거를 papers_core 가 아닌 ecosystem 컬렉션에서만 조회, 결합 가설 본문 분리.
+- 본 평가는 공개된 논문·백서·사례 자료를 기반으로 하며 자체 실측 벤치마크가 아니다.
+- TRL·시장성·이해관계자 평가는 공개 정보 기반 추정이므로 실제 최신 상용 배치 현황과 차이가 있을 수 있다.
+- TurboQuant와 ITME의 결합 효과는 동일 시스템에서 함께 측정된 공개 자료가 확인되지 않는 한 실측 결과가 아닌 가설로 다룬다.
+- GPU 벤치마크 수치는 원 논문의 보고값이며 본 프로젝트가 직접 측정한 결과가 아니다.
+- 자동 검증은 인용 ID의 존재 여부, 실행 범위, 허용 자료 범위 등을 결정적으로 검사한다.
+- Claim과 인용 근거의 내용적 적합성은 별도 내용 검토 워크시트에서 사람이 확인한다.
+- 확증 편향을 줄이기 위해 기술별 검색량을 균형 있게 유지하고, 성능 향상뿐 아니라 잔여 비용과 근거 공백도 함께 기록한다.
 
-{reference.build(state.get('sources', []), state.get('web_sources', []))}
+{reference.build(
+    manifest=state.get("sources", []),
+    web_sources=state.get("web_sources", []),
+    state=state,
+)}
 """
-    return {"report": md, "trace": [{"node": "report", "chars": len(md)}]}
+
+    return {
+        "report": md,
+        "trace": [
+            {
+                "node": "report",
+                "chars": len(md),
+                "deterministic": True,
+            }
+        ],
+    }
