@@ -91,3 +91,13 @@ def test_setup_requires_run_id_and_domain(tmp_path):
         graph.invoke({"trace": [], "run_config": {"domain": "x", "runs_dir": str(tmp_path)}})
     with pytest.raises(ValueError, match="domain"):
         graph.invoke({"run_id": "r1-test", "trace": [], "run_config": {"runs_dir": str(tmp_path)}})
+
+
+def test_smoke_script_reproduces_every_path(tmp_path):
+    """증빙 스크립트가 CI 에서도 돌아야 한다 — 증빙과 테스트가 갈라지지 않게."""
+    from scripts.r1_smoke import run
+
+    cases = run(tmp_path / "smoke")
+    assert [c["case"] for c in cases] == ["completed", "review_pending", "resume_after_review",
+                                          "unresolved_errors", "merge_conflict"]
+    assert all(c["passed"] for c in cases)
