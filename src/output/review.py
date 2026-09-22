@@ -71,13 +71,14 @@ def _evidence_text(evidence: dict) -> str:
 
 
 def _source_location(evidence: dict, source: dict) -> str:
-    """논문은 page, 웹은 URL을 우선 표시한다."""
-    page = evidence.get("page")
+    """원문 위치. 계약상 Evidence.location 이 이 값을 갖는다(§3 — 페이지 또는 웹 문단 위치).
 
-    if page is not None:
-        return f"page {page}"
-
-    return source.get("url") or evidence.get("url") or ""
+    page/url 로만 찾으면 색인 근거의 위치가 전부 빈칸이 된다. 검토자가 원문을 대조할
+    단서를 잃는다.
+    """
+    return (evidence.get("location")
+            or (f"page {evidence['page']}" if evidence.get("page") is not None else "")
+            or source.get("url") or evidence.get("url") or "")
 
 
 def build_review_rows(state: dict) -> list[dict]:
@@ -131,7 +132,10 @@ def build_review_rows(state: dict) -> list[dict]:
                     "claim_text": _claim_text(claim),
                     "evidence_id": evidence_id,
                     "source_id": source_id,
-                    "source_type": source.get("source_type", source.get("type", "")),
+                    # 색인 출처는 source_type 이 없다. 컬렉션이 직접 근거와 인접 생태계를
+                    # 가르는 단서라 대신 보여 준다(§5).
+                    "source_type": (source.get("source_type") or source.get("type")
+                                    or source.get("collection") or ""),
                     "location": _source_location(evidence, source),
                     "evidence_quote": _evidence_text(evidence),
                     "review_result": "",

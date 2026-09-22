@@ -96,3 +96,23 @@ def test_format_errors_survive_into_validation(state, tmp_path):
 
     errors = node.review(state)["validation"]["errors"]
     assert any(error["kind"] == "Evidence 없음" for error in errors)
+
+
+def test_review_reader_groups_rows_by_claim(state, tmp_path, capsys):
+    """읽기용 스크립트는 판정을 바꾸지 않는다. Claim 단위로 묶어 보여 주기만 한다."""
+    from scripts.review_reader import show
+
+    node.review(state)
+    path = tmp_path / "r5-test" / "review.csv"
+    before = path.read_text(encoding="utf-8")
+
+    assert show("r5-test", runs_dir=tmp_path, width=80) == 1
+    assert path.read_text(encoding="utf-8") == before      # 읽기 전용
+
+    out = capsys.readouterr().out
+    assert "claim-market" in out and "미판정" in out and "market 주장" in out
+
+    fill(path, "확인")
+    show("r5-test", runs_dir=tmp_path, width=80)
+    assert "확인 · 권예리" in capsys.readouterr().out
+    assert show("r5-test", runs_dir=tmp_path, only_pending=True, width=80) == 0
