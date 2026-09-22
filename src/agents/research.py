@@ -1,15 +1,26 @@
-"""기술 조사 — 담당: R4 | papers_core RAG | evidence 단일 쓰기 주체
+"""기술 조사 — 담당: R4 | papers_core RAG | bind_document_search 바인딩
 
-- 컬렉션 바인딩: papers_core 전용 (1차 논문 원문 근거 기반)
-- 핵심 임무: TurboQuant(SW 압축) 및 ITME(HW 메모리 접근) 접근 방식, 적용 범위, 한계 도출
+- 계약 준수: State 14필드 중 'research' 및 'trace' 단독 갱신
+- 스키마 규격: src.schema.Assessment (Claim, Evidence, Source, Gap 체계)
+- 컬렉션 바인딩: bind_document_search("research") -> papers_core (scope=direct 전용 자동 강제)
+- 핵심 임무: TurboQuant(SW 압축) 및 ITME(HW 메모리 접근) 시스템 계층, 적용 범위, 한계 도출
 - 설계서 2절 성능 수치 해석 가드레일 반영 (3.5비트, 8배, 1.80배, 35.7%, 1.81배)
-- 단독 갱신 키: evidence, research, tech_status, gaps, retrieval_round, trace
-- 상태 판정(tech_status): 1차 미확보 시 '근거 부족'(재조사), 2차 미확보 시 '평가 보류'로 파이프라인 지속
+- 인터페이스 계약 보완:
+    - 인용 사슬 닫힘성 보장: 본문에 실제 유효하게 인용된 청크만 Evidence/Source로 등록
+    - status="failed" 판정 시 claims=[] 강제
+    - 허위 인용(invalid_citations) 발생 시 실패 판정 및 trace 기록
+    - TurboQuant / ITME 기술별 Claim 분리 및 유효 evidence_ids 매핑
+    - Gap 객체의 technology(TurboQuant/ITME/both) 분기 처리
 """
 
-from typing import Any, Dict, List, Set
-from src.agents.common import perspective, run_node
-from src.tools.docs import format_chunks, search_source_documents
+import json
+import re
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Set, Tuple
+
+from src.agents.common import run_node
+from src.schema import Assessment, Claim, Evidence, Gap, Source
+from src.tools.docs import bind_document_search, format_chunks
 
 TECHS = ["TurboQuant", "ITME"]
 
@@ -25,7 +36,7 @@ INSTRUCTION = """당신은 데이터센터 및 클라우드 인프라 관점의 
 - 기술별로 절을 명확히 나누어 균형 있게 서술하십시오.
 - 우열 판정(어느 기술이 더 우월하다는 승자 판정)은 엄격히 금지합니다. 두 접근법의 본질적 차이를 기술하십시오.
 - 사실(fact) 주장은 반드시 본문 내에 검색된 청크의 12자리 hex ID를 `[12자리hex]` 형식으로 인용하십시오.
-- scope=comparison 문서(InfiniGen, PIM/CXL 계열 등)는 계열 비교에만 사용하며, 선정 기술의 성능 주장 근거로 대체하지 마십시오.
+- scope=comparison 문서는 계열 비교에만 사용하며, 선정 기술의 성능 주장 근거로 대체하지 마십시오.
 
 [설계서 2절 성능 수치 해석 가드레일 (위반 시 검증 탈락)]
 ① 3.5비트: TurboQuant의 3.5비트 양자화는 특정 모델 및 과제에 국한된 벤치마크 결과임을 명시하십시오. (일반 양자화 달성 단정 금지)
@@ -46,54 +57,96 @@ QUERIES = [
 ]
 WIDEN = " 벤치마크 처리량 지연시간 정확도 오버헤드 theoretical bound"
 
+HEX_CITATION_RE = re.compile(r"\[([0-9a-f]{12})\]")
+
+
+def _extract_gaps_from_text(text: str) -> List[Gap]:
+    """본문 마지막 줄의 '근거 공백: ...' 패턴을 파싱하여 Gap 객체 목록으로 변환."""
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    if not lines:
+        return []
+    last_line = lines[-1]
+    if not last_line.startswith("근거 공백:"):
+        return []
+
+    payload = last_line.replace("근거 공백:", "").strip()
+    if payload in ("", "없음", "None"):
+        return []
+
+    raw_items = [g.strip() for g in payload.split("|") if g.strip()]
+    gap_objects: List[Gap] = []
+    for item in raw_items:
+        tech_matched = "both"
+        lower_item = item.lower()
+        if "turboquant" in lower_item and "itme" not in lower_item:
+            tech_matched = "TurboQuant"
+        elif "itme" in lower_item and "turboquant" not in lower_item:
+            tech_matched = "ITME"
+
+        gap_objects.append(
+            Gap(
+                role="research",
+                technology=tech_matched,
+                item=item,
+                reason="논문 본문 추출 미확인 영역",
+            )
+        )
+    return gap_objects
+
+
+def _split_technology_sections(text: str) -> Tuple[str, str]:
+    """본문에서 TurboQuant 서술부와 ITME 서술부를 분리."""
+    tq_pattern = r"(?:^|\n)(?:1\.\s*TurboQuant|###\s*1\.\s*TurboQuant|TurboQuant\s*(?:접근|조사|기술))"
+    itme_pattern = r"(?:^|\n)(?:2\.\s*ITME|###\s*2\.\s*ITME|ITME\s*(?:접근|조사|기술))"
+
+    tq_match = re.search(tq_pattern, text, re.IGNORECASE)
+    itme_match = re.search(itme_pattern, text, re.IGNORECASE)
+
+    if tq_match and itme_match:
+        tq_start = tq_match.start()
+        itme_start = itme_match.start()
+        if tq_start < itme_start:
+            tq_text = text[tq_start:itme_start].strip()
+            itme_text = text[itme_start:].strip()
+            return tq_text, itme_text
+
+    # 패턴 매칭이 실패한 경우 전체를 통짜로 반환
+    return text.strip(), ""
+
 
 def research(state: Dict[str, Any]) -> Dict[str, Any]:
-    """양 기술 근거를 papers_core에서 수집해 evidence 풀을 채우고 기술 조사 관점을 생성한다.
-    
-    State 입력:
-      - evidence: 이전 회차 수집 청크 리스트 (없으면 [])
-      - retrieval_round: 현재까지의 검색 회차 (기본값 0)
-      - domain: 대상 도메인 (기본값 제공)
-      
-    State 단독 갱신 반환:
-      - evidence: 누적된 모든 유효 청크 리스트
-      - research: 관점 dict {text, citations, gaps, bad_citations}
-      - tech_status: 기술별 상태 dict (예: {"TurboQuant": "ok", "ITME": "근거 부족"})
-      - gaps: 본문 공백 및 미확보 기술 목록
-      - retrieval_round: 증가된 회차 (int)
-      - trace: 실행 기록 리스트 (누적)
+    """papers_core에서 양 기술 1차 근거를 수집하고 schema.Assessment를 구성하여 반환한다.
+
+    State 14필드 규약:
+      - 입력: run_id, run_config, domain (선택)
+      - 반환: research (Assessment dict), trace (Event dict list)
     """
-    rnd = state.get("retrieval_round", 0)
+    run_id = state.get("run_id", "default_run")
+    domain = state.get(
+        "domain",
+        state.get("run_config", {}).get("domain", "데이터센터/클라우드 추론 인프라 (대규모 동시성, 비용 민감)"),
+    )
 
-    # 1. 기존 누적 evidence 복원 (재조사 라운드 시 이전 청크 보존)
-    accumulated_chunks: List[Dict[str, Any]] = list(state.get("evidence", []))
-    seen: Set[str] = {c["chunk_id"] for c in accumulated_chunks if "chunk_id" in c}
+    # 1. R3 계약에 따른 research 전용 문서 검색기 바인딩 (papers_core, direct 자동 강제)
+    doc_search = bind_document_search("research")
 
-    # 2. 질의 구성 (1차는 기본 질의, 2차 이상 재조사 시에는 WIDEN 키워드 확장)
-    queries = QUERIES if rnd == 0 else [q + WIDEN for q in QUERIES]
+    accumulated_chunks: List[Dict[str, Any]] = []
+    chunk_index_map: Dict[str, Dict[str, Any]] = {}
 
-    # 3. papers_core 전용 검색 실행
-    for tech in TECHS:
-        for q in queries:
-            results = search_source_documents.invoke({
-                "query": q,
-                "collection": "papers_core",
-                "technology": tech,
-                "perspective": "research",
-                "top_k": 5,
-            })
-            for c in results:
-                cid = c.get("chunk_id")
-                if cid and cid not in seen:
-                    seen.add(cid)
-                    accumulated_chunks.append(c)
+    def _execute_search(query_list: List[str]):
+        for tech in TECHS:
+            for q in query_list:
+                hits = doc_search.invoke({"query": q, "technology": tech, "top_k": 5})
+                for c in hits:
+                    cid = c.get("chunk_id")
+                    if cid and cid not in chunk_index_map:
+                        chunk_index_map[cid] = c
+                        accumulated_chunks.append(c)
 
-    # 4. LLM 생성 및 표준 관점 dict 생성
-    domain = state.get("domain", "데이터센터/클라우드 추론 인프라 (대규모 동시성, 비용 민감)")
-    text = run_node(INSTRUCTION, domain, format_chunks(accumulated_chunks))
-    p = perspective(text, seen)  # 계약 ② 표준 {text, citations, gaps, bad_citations}
+    # 2. 1차 기본 검색
+    _execute_search(QUERIES)
 
-    # 5. primary 1차 근거(scope == "direct") 확보 여부 검증
+    # direct 근거 확보 여부 확인
     covered_techs = {
         tech
         for c in accumulated_chunks
@@ -101,37 +154,149 @@ def research(state: Dict[str, Any]) -> Dict[str, Any]:
         for tech in c.get("applies_to", [])
     }
 
-    # 6. 라운드별 tech_status 판정
-    # - 1차(rnd == 0) 미확보: '근거 부족' -> LangGraph 조건부 엣지가 재조사(research) 유도
-    # - 2차(rnd >= 1) 미확보: '평가 보류' -> 무한 루프 방지 및 파이프라인 지속
-    status: Dict[str, str] = {}
-    for tech in TECHS:
-        if tech in covered_techs:
-            status[tech] = "ok"
+    # 3. 내부 루프 보완 검색 (미확보 기술 존재 시 WIDEN 질의로 1회 보완)
+    supplemental_searches = 0
+    if len(covered_techs) < len(TECHS):
+        supplemental_queries = [q + WIDEN for q in QUERIES]
+        _execute_search(supplemental_queries)
+        supplemental_searches = len(supplemental_queries)
+
+    # 4. LLM 실행
+    prompt_context = format_chunks(accumulated_chunks)
+    generated_text = run_node(INSTRUCTION, domain, prompt_context)
+
+    # 5. 본문 인용 파싱 및 검증
+    all_citations = HEX_CITATION_RE.findall(generated_text)
+    valid_citations = [cid for cid in all_citations if cid in chunk_index_map]
+    invalid_citations = [cid for cid in all_citations if cid not in chunk_index_map]
+    cited_ids_set = set(valid_citations)
+
+    # 6. schema.Assessment 구성
+    # 6-1. 인용 사슬 닫힘성 보장: 본문에 실제로 인용된 청크만 Source 및 Evidence로 등록
+    sources_map: Dict[str, Source] = {}
+    evidence_map: Dict[str, Evidence] = {}
+
+    for cid in cited_ids_set:
+        c = chunk_index_map[cid]
+        sid = c.get("source_id") or c.get("source", "unknown_source")
+        collection_name = c.get("collection", "papers_core")
+
+        # Source 등록 (필수: source_id, run_id, collection, allowed_uses)
+        if sid not in sources_map:
+            sources_map[sid] = Source(
+                source_id=sid,
+                run_id=run_id,
+                collection=collection_name,
+                allowed_uses=["research", "maturity", "domain"],
+                title=c.get("title", sid),
+            )
+
+        # Evidence 등록 (인용 사슬 형성용)
+        evidence_map[cid] = Evidence(
+            evidence_id=cid,
+            source_id=sid,
+            run_id=run_id,
+            collection=collection_name,
+            allowed_uses=["research"],
+            quote=c.get("text", "")[:300],
+            location=f"p.{c.get('page', 1)}",
+        )
+
+    # 6-2. 상태 판정 (completed / partial / failed)
+    # 실제 본문에 유효하게 인용된 scope=direct 청크 기준으로 대상 기술 충족 여부 확인
+    cited_covered_techs = {
+        tech
+        for cid in cited_ids_set
+        for tech in chunk_index_map[cid].get("applies_to", [])
+        if chunk_index_map[cid].get("scope") == "direct"
+    }
+
+    if len(cited_covered_techs) == len(TECHS) and valid_citations and not invalid_citations:
+        status = "completed"
+    elif valid_citations and not invalid_citations:
+        status = "partial"
+    else:
+        status = "failed"
+
+    # 6-3. Claim 구성: status=failed인 경우 규약에 따라 반드시 claims=[] 강제
+    claims: List[Claim] = []
+    if status != "failed":
+        tq_text, itme_text = _split_technology_sections(generated_text)
+
+        if tq_text and itme_text:
+            # 기술별 Claim 분리 생성
+            tq_cits = [cid for cid in HEX_CITATION_RE.findall(tq_text) if cid in cited_ids_set]
+            itme_cits = [cid for cid in HEX_CITATION_RE.findall(itme_text) if cid in cited_ids_set]
+
+            claims.append(
+                Claim(
+                    claim_id=f"claim_research_tq_{run_id[:8]}",
+                    text=tq_text,
+                    technology="TurboQuant",
+                    kind="fact",
+                    evidence_ids=list(dict.fromkeys(tq_cits)),
+                )
+            )
+            claims.append(
+                Claim(
+                    claim_id=f"claim_research_itme_{run_id[:8]}",
+                    text=itme_text,
+                    technology="ITME",
+                    kind="fact",
+                    evidence_ids=list(dict.fromkeys(itme_cits)),
+                )
+            )
         else:
-            status[tech] = "근거 부족" if rnd == 0 else "평가 보류"
+            # 섹션 분리가 안 된 경우 fallback 단일 Claim
+            claims.append(
+                Claim(
+                    claim_id=f"claim_research_all_{run_id[:8]}",
+                    text=generated_text,
+                    technology="both",
+                    kind="fact",
+                    evidence_ids=list(dict.fromkeys(valid_citations)),
+                )
+            )
 
-    # 7. gaps 병합 (본문 파싱 gaps + 상태 미확보 안내)
-    missing_notes = [f"{tech}: 원문 1차 근거(direct) 미확보" for tech, s in status.items() if s != "ok"]
-    merged_gaps = list(dict.fromkeys(p.get("gaps", []) + missing_notes))
+    # 6-4. Gap 구성
+    gap_objects = _extract_gaps_from_text(generated_text)
 
-    # 8. 계약 ① State 17키 단독 갱신 반환
+    # 원문 미확보 기술에 대한 명시적 Gap 기록
+    for tech in TECHS:
+        if tech not in cited_covered_techs:
+            gap_objects.append(
+                Gap(
+                    role="research",
+                    technology=tech,
+                    item=f"{tech} 1차 원문(direct) 실증 근거 인용 미확보",
+                    reason="papers_core 색인 내 scope=direct 청크 인용 부재",
+                )
+            )
+
+    # 6-5. Assessment 객체 조립
+    assessment = Assessment(
+        status=status,
+        claims=claims,
+        sources=list(sources_map.values()),
+        evidence=list(evidence_map.values()),
+        gaps=gap_objects,
+    )
+
+    # 7. trace 이벤트 생성 (Event 스키마 호환 dict)
+    trace_event = {
+        "node": "research",
+        "status": status,
+        "attempt": 1,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "chunks": len(accumulated_chunks),
+        "citations": len(valid_citations),
+        "invalid_citations": len(invalid_citations),
+        "supplemental_searches": supplemental_searches,
+        "covered_techs": sorted(list(cited_covered_techs)),
+    }
+
+    # 8. State 14필드 단독 쓰기 반환
     return {
-        "evidence": accumulated_chunks,
-        "research": {
-            **p,
-            "gaps": merged_gaps,
-        },
-        "tech_status": status,
-        "gaps": merged_gaps,
-        "retrieval_round": rnd + 1,
-        "trace": [
-            {
-                "node": "research",
-                "round": rnd + 1,
-                "chunks": len(accumulated_chunks),
-                "direct_covered": sorted(list(covered_techs)),
-                "status": status,
-            }
-        ],
+        "research": assessment.model_dump(),
+        "trace": [trace_event],
     }
