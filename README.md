@@ -1,5 +1,9 @@
 # KV cache 최적화 기술 다관점 평가
 
+[![tests](https://github.com/MK513/kv-cache-rag/actions/workflows/test.yml/badge.svg)](https://github.com/MK513/kv-cache-rag/actions/workflows/test.yml)
+![python](https://img.shields.io/badge/python-3.11-blue)
+![langgraph](https://img.shields.io/badge/LangGraph-1.x-1C3C3C)
+
 KV cache 최적화 기술을 소프트웨어·하드웨어 두 진영에서 선정해 TRL·시장성·이해관계자·도메인
 관점에서 비교하고, **근거의 일치·상충을 구조화**하는 Agentic RAG.
 
@@ -235,6 +239,29 @@ PDF 는 **검증을 통과했을 때만** 나온다(§8 — 무효 인용이 남
 
 ---
 
+## 테스트
+
+```bash
+uv sync
+uv run pytest -q          # 162 passed — API 키·원문(data/raw/) 없이 돈다
+```
+
+LLM·웹 검색·임베딩 색인·원문 해시 대조를 fixture 로 막고 계약만 본다. 푸시와 PR 마다
+GitHub Actions 가 같은 명령을 돌린다([.github/workflows/test.yml](.github/workflows/test.yml)).
+
+| 층 | 파일 | 보는 것 |
+|---|---|---|
+| 단위 | `test_r1_*` ~ `test_r5_*` | 역할별 노드·검색·인용 검증·검토·제출본 |
+| 통합 | `test_integration_graph.py` | 실물 노드로 그래프를 끝까지 돌려 R1~R5 계약이 맞물리는지 (`stakeholder` 만 stub) |
+
+통합 테스트를 따로 둔 이유: 역할별 코드가 모두 main 에 들어오고 단위 테스트 82개가
+통과했는데도 **파이프라인은 한 번도 끝까지 돈 적이 없었다.** 각 테스트가 손으로 만든
+state 로 자기 함수만 불렀기 때문이다. 그중 검증 결과가 State 에 실리지 않아
+`final_check` 가 무효 인용을 못 보고 `completed` 로 끝나는 버그는 죽지 않고 조용히
+통과했다. 경위와 수정 단계는 [docs/fix-interface-plan.md](docs/fix-interface-plan.md).
+
+---
+
 ## 재현성 — 어디까지 되고 어디부터 안 되는가
 
 **같은 보고서가 다시 나오지 않는다.** 이 파이프라인은 그것을 목표로 하지 않는다.
@@ -301,7 +328,7 @@ REFERENCE          [A] Doc Pool 논문  [B] 풀 밖 색인(ecosystem·context)  
 
 | 이름 | 담당 | 주요 산출물 |
 |---|---|---|
-| 김민 | Graph & Runtime | State(§7 14행/17필드), 공용 `schema.py`, LangGraph 배선, run_id 기반 실행 제어 |
+| 김민 | Graph & Runtime · 통합 | State(§7 14행/17필드), 공용 `schema.py`, LangGraph 배선, run_id 기반 실행 제어, 인터페이스 정합과 통합 테스트(#13), CI |
 | 권수진 | RAG 인프라 | 3 컬렉션 구성(excerpt 페이징), SHA-256·쪽수 매니페스트, 표/수식 깨짐 검토 마킹, 검색 평가셋 |
 | 정승원 | 검색 계층·시장성·이해관계자 | dense 코사인 검색, 역할별 컬렉션·관점 잠금, 웹 근거 수집·스냅샷, 이해관계자 평가 노드 |
 | 권예리 | 평가 에이전트 | 기술조사·TRL 규칙표·도메인 노드, 검색 품질 실측 스크립트 |

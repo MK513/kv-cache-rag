@@ -1,0 +1,26 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # uv.lock 그대로 설치한다. 테스트는 LLM·웹 검색·임베딩·원문(data/raw/)을
+      # 전부 fixture 로 막으므로 API 키가 필요 없다.
+      - name: Install
+        run: uv sync --frozen
+
+      - name: Test
+        run: uv run --frozen pytest -q

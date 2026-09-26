@@ -112,6 +112,8 @@ def wired(monkeypatch, tmp_path):
     monkeypatch.setattr(synthesis_module, "get_llm", lambda: FakeSynthesis())
     monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
     monkeypatch.setattr("src.rag.index.build", lambda: {"manifest": [{"id": "turboquant-paper"}]})
+    # 원문(data/raw/)은 저작권 문제로 커밋하지 않는다. 해시 대조 자체는 test_r1_graph 가 따로 본다.
+    monkeypatch.setattr("src.graph.verify_corpus", lambda manifest: [])
     monkeypatch.setattr(pdf, "render_pdf",
                         lambda md, out: (out.parent.mkdir(parents=True, exist_ok=True),
                                          out.write_bytes(b"%PDF fixture")))
