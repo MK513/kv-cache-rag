@@ -4,7 +4,9 @@
 여기서 한 번만, 결정적으로 고른다.
 
 - 같은 `task_id` 결과가 여러 번 오면 1회만 반영한다. 내용이 다르면 정합성 오류다.
-- (관점, 기술) 칸마다 그 칸을 대상으로 한 **가장 최근 round** 결과만 쓴다(칸 단위 교체).
+- (관점, 기술) 칸마다 그 칸을 대상으로 한 **가장 최근 round 의 실패하지 않은** 결과만 쓴다
+  (칸 단위 교체). 재시도가 또 실패해도 이전 라운드의 정상 결과를 지우지 않는다. 실패 결과만
+  있는 칸은 실행 실패로 본다.
 - `claim_flags` 가 invalid 인 Claim 은 어느 결과에서든 뺀다.
 - 결과 순서는 병렬 도착 순서에 의존하지 않도록 (round, task_id) 로 정렬한다.
 - 유효 Claim 이 없는 칸에는 원인을 구분한 Gap 을 남긴다.
@@ -35,6 +37,16 @@ def _dedupe(worker_results: list[dict]) -> list[dict]:
     return sorted(seen.values(), key=lambda r: (r["round"], r["task"]["task_id"]))
 
 
+def latest_by_cell(worker_results: list[dict]) -> dict[tuple[str, str], dict]:
+    """(관점, 기술) → 그 칸을 대상으로 한 최신의 실패하지 않은 결과. 없으면 최신 실패 결과."""
+    ok, failed = {}, {}
+    for result in _dedupe(worker_results):           # round 오름차순이라 뒤가 이긴다
+        table = failed if result["status"] == "failed" else ok
+        for tech in result["task"]["technologies"]:
+            table[(result["task"]["perspective"], tech)] = result
+    return failed | ok
+
+
 def _cell_gap(perspective, tech, kind, item, reason, attempted=()):
     return Gap(role=ROLE[perspective], technology=tech, kind=kind, item=item, reason=reason,
                attempted_queries=list(attempted)).model_dump()
@@ -46,10 +58,7 @@ def select_active_worker_results(worker_results: list[dict], claim_flags: dict |
     invalid = {cid for cid, flag in flags.items() if (flag or {}).get("status") == "invalid"}
     results = _dedupe(worker_results or [])
 
-    latest: dict[tuple[str, str], dict] = {}          # (관점, 기술) → 최신 결과
-    for result in results:                            # round 오름차순이라 뒤가 이긴다
-        for tech in result["task"]["technologies"]:
-            latest[(result["task"]["perspective"], tech)] = result
+    latest = latest_by_cell(results)
 
     assessments, cell_gaps = {}, []
     for perspective in PERSPECTIVES:
