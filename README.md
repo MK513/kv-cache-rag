@@ -4,324 +4,254 @@
 ![python](https://img.shields.io/badge/python-3.11-blue)
 ![langgraph](https://img.shields.io/badge/LangGraph-1.x-1C3C3C)
 
-KV cache 최적화 기술을 소프트웨어·하드웨어 두 진영에서 선정해 TRL·시장성·이해관계자·도메인
-관점에서 비교하고, **근거의 일치·상충을 구조화**하는 Agentic RAG.
+이 프로젝트는 KV cache 최적화 기술을 소프트웨어와 하드웨어 진영에서 각각 선정합니다. 선정한
+기술은 TRL·시장·이해관계자·도메인 관점에서 평가하며, 평가 시스템은 **Orchestrator-Workers**
+패턴 기반으로 설계하고 개발합니다. 우열 판정이 아니라 **관점 간 근거의 일치·상충을 구조화**합니다.
 
 **판교 8반** · 권수진 · 권예리 · 김민 · 박인기 · 정승원
 
 - 계약 문서 → [docs/interface.md](docs/interface.md)
+- 실행 매뉴얼·결과 읽는 법(run_status·재현성·보고서 목차·테스트 구성) → [docs/run-notes.md](docs/run-notes.md)
 - 인수 기록 → [docs/r1-handoff.md](docs/r1-handoff.md) · [docs/r3-handoff.md](docs/r3-handoff.md)
+- Orchestrator-Workers 계획 → [docs/agent/orchestrator-workers-plan.md](docs/agent/orchestrator-workers-plan.md) · 그래프 → [docs/agent/graph.md](docs/agent/graph.md)
 
 ---
 
 ## Overview
 
-- **Objective** : 하나의 기술을 복수 관점에서 비교 평가 — 우열 판정이 아니라 관점 간
-  근거의 일치·상충을 정리
-- **Method** : Multi-Agent(LangGraph fan-out/fan-in) + Agentic RAG
-- **Tools** : FAISS(dense 검색), Tavily(웹 검색), pdfplumber·pypdf(PDF 파싱)
+- **Objective** : 하나의 기술을 여러 관점에서 비교하고 평가합니다 — 우열 판정이 아니라 관점 간
+  근거의 일치·상충을 정리합니다.
+- **Pattern** : **Orchestrator-Workers**
+  - 선정 이유 — 관점별 조사를 몇 개로 나눌지가 **실행 시점의 근거 상태**에 따라 달라집니다.
+    두 기술 모두 근거가 충분한 관점은 기술별로 나누고, 한 기술 근거가 비면 그 칸은 계획 단계의
+    근거 공백으로 두고 다른 기술만 조사합니다. 이 분해를 Orchestrator 가 계획하고 그 수만큼
+    Worker 를 보냅니다.
+  - trade-off — 얻는 것: 계획이 State 에 남아 무엇을 왜 몇 개로 나눴는지 추적 가능, Worker 병렬
+    실행, 품질 미달 시 부족한 칸만 재조사. 치르는 것: 계획 단계 비용, 계획의 비결정성(결정적 개수
+    규칙·LLM 캐시로 완화), 실행 도중 즉시 재배치는 Supervisor 보다 약함(평가 후 재계획으로만 조정).
+- **동적 처리** : 고정 순서(`research → maturity·market·stakeholder·domain 4개 고정 fan-out`)와 달리
+  - **Worker 목록이 코드에 없습니다.** orchestrator 가 세운 `plan` 의 Task 수만큼 `Send` 로 Worker 를
+    띄웁니다(최초 계획 4~7개, 재계획은 미충족 칸만, 라운드당 상한 8). 최초 개수는 근거 가용성
+    사전 조사(유사도 ≥ τ 청크 수)와 결정적 규칙이 정하고, LLM 은 Task 의 focus·질의만 채웁니다.
+  - 보고서를 만든 뒤 `quality_eval` 이 6기준으로 평가해 **다음 노드를 고릅니다** — 근거 문제는
+    orchestrator 재계획(실패·지목된 칸만), 종합 문제는 synthesis, 보고서 문제는 report, 통과면 발행.
+  - Worker 하나가 예외를 내도 그래프는 멈추지 않습니다. 실패한 칸은 `execution_gap` 으로 남고, 품질 평가가
+    재계획으로 보내면 일시 오류 칸만 다시 조사합니다(영구 오류는 제외).
 
-### Selected Technologies
+---
 
-- **SW : TurboQuant** — KV cache를 저비트로 압축해 메모리 병목을 데이터 크기 축소로 해결
-- **HW : ITME** — 메모리 접근 공간을 넓혀 KV cache 병목을 하드웨어 관점에서 해결
+## Selected Technologies
+
+- **SW : TurboQuant** — KV cache 를 저비트로 압축해 메모리 병목을 **데이터 크기 축소**로 해결합니다.
+  선정 이유: 학습 없이 적용하는 온라인 양자화라 서빙 스택(vLLM 등) 채택 여부로 시장성·생태계를
+  관찰할 수 있고, 원 논문과 Google Research 공개 자료로 근거를 확보할 수 있습니다.
+- **HW : ITME** — CXL 하이브리드 메모리로 TB급 원격 메모리를 붙여, 호스트 메모리를 넘는 KV cache 를
+  **하드웨어 쪽 용량 확장**으로 수용합니다(GPU 로 다단 DMA 선반입).
+  선정 이유: SW 압축과 같은 병목을 반대 방향에서 푸는 접근이라 관점 간 일치·상충을 비교하기에
+  적합합니다. 직접 원문이 SK hynix 자료뿐이라는 근거 비대칭은 편향 예외로 공개합니다.
 
 ---
 
 ## Features
 
 - PDF·웹 자료 기반 정보 추출 (papers_core 4 · ecosystem 5 · context 1 = PDF 6·웹 4,
-  `scripts/prepare_sources.py`가 SHA-256·쪽수 매니페스트 생성)
-- 근거 소재별 컬렉션 분리(`papers_core`/`ecosystem`/`context`)로 관점 간 근거 오염 방지
-- dense(FAISS, multilingual-e5-small) 단일 검색 + 역할별 컬렉션·scope 접근 제어(`ROLE_COLLECTIONS`)
-- 결정적(비-LLM) 인용 검증과 사람의 내용 검토를 `review` 노드에서 수행, 미해결 오류는
-  `fail`이 로그를 남기고 제출용 출력을 차단
-- 검토 대기 상태에서 실행을 멈추고 사람의 내용 검토 후 재개(`app.py --resume <run_id>`)
-- 확증 편향 방지 전략 : 상충을 강제하지 않되(억지 상충 금지) 기술별 검색 기회를 맞추고,
-  검색 필터링 + 필터 통과 전 컬렉션 전체를 전수 검색(랭킹 후 필터링)해 비대칭 코퍼스의 쏠림을 완화
+  `scripts/prepare_sources.py`가 SHA-256·쪽수 매니페스트 생성) + 이해관계자 관점은 실행마다 웹 수집
+- 근거 소재별 컬렉션 분리(`papers_core`/`ecosystem`/`context`)와 역할별 접근 제어(`ROLE_COLLECTIONS`)로
+  관점 간 근거 오염 방지
+- 모든 주장은 `Claim → Evidence → Source` 로 원문 위치까지 이어지고, 근거가 없으면 Gap 으로 남깁니다
+  (`evidence_gap`·`execution_gap`·`invalid_evidence`)
+- **확증 편향 방지 전략** : 상충을 강제하지 않되(억지 상충 금지) 기술별 검색 기회를 맞추고, 필터
+  통과 전 컬렉션 전체를 랭킹한 뒤 필터링해 비대칭 코퍼스의 쏠림을 완화합니다. 품질 평가에서
+  ① 기술별 출처 묶음 ≥ 2 ② 단일 묶음 비중 ≤ 60% ③ 선택적 근거 사용(한계·비용 주장 누락)을 검사하고,
+  ITME 처럼 구조적으로 못 넘는 경우는 사전 정의 예외로 보고서 §6 에 사유를 공개합니다.
+- **보고서 품질 평가** : 코드 검사 → LLM Judge 의 Hybrid. 아래 6기준을 실제로 표시된 보고서
+  (`report_manifest`)에 대해 평가하고, 실패 기준에 따라 재작업 노드를 고릅니다.
+
+| 기준 | 코드 검사 | Judge | 실패 시 |
+|---|---|---|---|
+| groundedness_l1 | 표시 Claim 의 claim→evidence→source 연결 | 근거가 주장을 뒷받침하는가 (층화 표본) | 재계획 |
+| groundedness_l2 | 종합 항목이 표시된 유효 Claim 만 가리키는가 | 참조 범위를 벗어난 서술인가 | synthesis |
+| neutrality | 승자·추천·우열 표현 패턴 | 우열 판정·조건 다른 수치의 단순 비교 | synthesis |
+| bias | ① 출처 묶음 ≥ 2 ② 단일 묶음 ≤ 60% (기술별) | ③ 선택적 근거 사용 | 재계획 |
+| coverage | 4관점 × 2기술 칸마다 유효 Claim 또는 근거 공백 | 관점을 실질적으로 다루는가 | 재계획 |
+| structure | SUMMARY 처음·REFERENCE 끝·인용 일치·렌더링 쪽수(10쪽) | — | report |
+
+- 선택 단계로 사람의 내용 검토(`--human-review`) 후 재개(`app.py --resume <run_id>`)
+- 모든 라우팅 결정과 사유를 `runs/<run_id>/decisions.jsonl` 에 남깁니다
+
+---
 
 ## Tech Stack
 
-- **Framework** : LangGraph
-- **LLM/Generator** : gpt-4.1-mini (temperature 0, seed 고정)
-- **LLM/Judge** : 해당 없음 — 인용 검증은 LLM 채점이 아닌 인덱스 실물 대조 방식의 결정적 검사
-- **Retrieval** : FAISS dense 단일 모드 (Hit@K·MRR@K 측정 스크립트 구현, 정답 청크 라벨링
-  미완으로 수치 미확정)
-- **Embedding** : intfloat/multilingual-e5-small (384차원, cross-lingual, revision 고정)
+| 구분 | 내용 |
+|---|---|
+| Framework | LangGraph 1.x (`Send` 동적 fan-out, `InMemorySaver`, `interrupt_after`) |
+| LLM / Generator | gpt-4.1-mini (temperature 0, seed 고정) — 계획·생성·종합 |
+| LLM / Judge | gpt-4.1-mini (`llm.judge_model` 로 분리 가능). 코드 검사를 통과한 기준만 Judge 가 봅니다 |
+| Retrieval | FAISS dense(코사인) 단일 모드. 평가 지표 Hit Rate@K 와 MRR@K (`eval/retrieval_metrics.py`) |
+| Embedding | intfloat/multilingual-e5-small (384차원, revision 고정) — 한국어 질의로 영어 원문을 찾는 cross-lingual 검색, CPU 로 돌아가는 크기 |
+
+검색 품질 (`uv run python -m eval.retrieval_metrics`, papers_core · dense) — 실측 후 기입 예정
+
+| Lang | n | Hit@1 | Hit@3 | Hit@5 | MRR@3 | MRR@5 |
+|---|---|---|---|---|---|---|
+| 전체 | | | | | | |
+| ko | | | | | | |
+| en | | | | | | |
 
 ---
 
 ## Agents
 
-| 노드 | 역할 | 근거 |
+- **Orchestrator** (`orchestrator`) : research 결과로 조사 계획을 세웁니다. 근거 가용성 사전 조사(결정적,
+  LLM 없음) → Task 개수 규칙 → LLM 이 Task 마다 focus·질의·사유만 채웁니다. 개수가 다르거나 호출이
+  실패하면 같은 개수의 결정적 기본 계획을 씁니다. 재계획 때는 일시 오류로 실패한 칸과 품질 평가가
+  지목한 칸만 다시 보냅니다.
+- **선행 조사** (`research`) : 접근 방식·적용 범위·한계를 추출합니다 — 계획의 입력 (papers_core)
+- **Workers** (`worker`) : Task 의 관점으로 아래 에이전트를 골라 실행하고 결과를 `worker_results` 에 누적합니다.
+  - `maturity` — TRL 규칙표 기반 성숙도 판정 (papers_core)
+  - `market` — 규모·채택·생태계 평가 (ecosystem)
+  - `stakeholder` — 경쟁·도입·개발자·투자 반응 평가 (웹, 색인 안 함)
+  - `domain_assessment` — 데이터센터/클라우드 적합성 평가 (papers_core + context)
+- **Fan-in** (`collect_evidence`) : 라운드별 유효 결과를 골라 출처·근거를 병합합니다. 같은 ID 에 다른
+  내용이 오면 병합 오류로 실행을 끝냅니다.
+- **Synthesis** (`synthesis`) : 관점 간 일치·상충·근거 공백을 병합하고 결합 가설을 분리합니다.
+- **Report** (`report`) : 목차 조립과 10쪽 상한 압축 (Markdown)
+- **Evaluator** (`quality_eval`) : 6기준 평가 후 다음 노드를 정합니다.
+- **Human Review** (`human_review` · `apply_review`, 선택) : worksheet 를 만들고 멈춘 뒤, 부결 Claim 을
+  빼고 재종합합니다.
+- **Publish** (`publish`) : publish guard(평가한 버전 = 발행할 버전) 확인 후 제출본을 저장합니다.
+
+---
+
+## State Schema
+
+정의는 [src/state.py](src/state.py), 형식은 [src/schema.py](src/schema.py).
+
+| 항목 | 설계 |
+|---|---|
+| 제어 vs 페이로드 분리 | 제어: `plan`, `retry_count`, `repair_count`, `step_count`, `guard_retry_count`, `claim_flags`, `last_decision`, `last_error`, `stop_reason`, `run_status` / 페이로드: `research`, 관점별 Assessment 4개, `worker_results`, `source_registry`·`evidence_registry`, `gaps`, `synthesis`, `report`, `report_manifest`, `quality_eval` |
+| 관측성 위치 | 계획 전문·재시도 대상 선택·품질 판정 사유는 `runs/<run_id>/decisions.jsonl` + LangSmith. State 에는 `last_decision` 요약만 둡니다 |
+| 지속성 비용 | 누적 필드는 `worker_results`·`trace` 둘뿐입니다. `worker_results` 는 라운드당 최대 8건 × 3라운드 = 최대 24건, `trace` 는 가벼운 이벤트만. 원본 결과·웹 스냅샷·이전 보고서는 State 가 아니라 `runs/<run_id>/` 파일에 둡니다. `Send` 는 현재 State 전체에 `task` 를 붙여 넘깁니다(체크포인트 크기는 실측 전) |
+| 상관 | `run_id` = LangGraph thread_id = LangSmith `metadata.run_id`. 결정·Worker 결과마다 `task_id`·`round`·`report_version` 을 남깁니다 |
+| 재개/복구 | `InMemorySaver`(프로세스 내). 상태 `plan`·`run_status` / 에러 `last_error`·`worker_results[].error_kind`·`stop_reason` / 재시도 `retry_count`·`repair_count`·`step_count`. 같은 `task_id` 결과는 1회만 반영합니다. 사람 검토 재개는 `state.json` 을 새 스레드에 올려 `apply_review` 부터 잇습니다 |
+| 동시 처리 | `Send` Worker 는 `worker_results`·`trace` 에만 쓰고 `operator.add` 로 병합합니다. 도착 순서에 의존하지 않도록 `(round, task_id)` 로 정렬하고, Claim ID 는 `task_id` 접두로 전역 유일합니다. State 밖 공유 자원(웹 수집 파일)은 Task 별 폴더로 나눕니다 |
+| 종료 보장 | 재계획 2회·수리 2회·결정 12회·웹 검색 16회 등 아래 상한을 추가 실행 **전에** 검사하고, 닿으면 멈추지 않고 `partial` 로 발행합니다. 마지막 안전장치는 `recursion_limit` 60 |
+
+상한 (`config/settings.yaml` 의 `orchestrator`)
+
+| 상한 | 값 | 닿으면 |
 |---|---|---|
-| `research` | 접근 방식·적용 범위·한계 추출, Assessment 반환 | papers_core |
-| `maturity` | TRL 규칙표 기반 성숙도 판정 | papers_core |
-| `market` | 규모·채택·생태계 평가 | ecosystem |
-| `stakeholder` | 경쟁·도입·개발자·투자 반응 평가 | 웹 (색인 안 함) |
-| `domain_assessment` | 데이터센터/클라우드 적합성 평가 | papers_core + context |
-| `synthesis` | 관점 간 일치·상충·근거 공백 병합, 결합 가설 분리 | State 읽기 |
-| `report` | 목차 조립 및 결정적 포맷팅 (Markdown) | State 읽기 |
-| `publish` | 레이아웃 확인 후 제출본 저장 (PDF 변환·품질 점검) | State 읽기 |
+| `max_retry` | 2 | 재계획 라운드. 근거 문제가 남아도 `partial` 로 발행 |
+| `max_workers` | 8 | 한 라운드의 Task·Worker 수. 넘친 대상은 결정 로그에 남김 |
+| `max_repairs` | 2 | synthesis·report 수리 횟수 |
+| `max_steps` | 12 | orchestrator·quality_eval 결정 수 |
+| `max_guard_retries` | 2 | 구버전 보고서 재생성. 닿으면 publish 가 `failed` |
+| `max_searches` | 16 | 실행 전체 웹 검색 예산 (라운드마다 새로 주지 않습니다) |
+| `max_judge_retries` | 1 | Judge 호출 재시도. 그래도 실패하면 `partial` |
+| `recursion_limit` | 60 | LangGraph 안전장치 |
+
+---
 
 ## Architecture
 
+![Architecture](docs/agent/architecture.png)
+
+<details>
+<summary>Mermaid 원본</summary>
+
 ```mermaid
 flowchart TD
-  A[설정 확인과 논문 적재 · setup] --> B[기술 조사와 근거 점검 · research]
-  B --> T[TRL 평가 RAG · maturity]
-  B --> M[시장성 평가 RAG · market]
-  B --> S[이해관계자 평가 웹 · stakeholder]
-  B --> D[도메인 평가 RAG · domain_assessment]
-  T --> C[collect_evidence 네 결과 합류]
-  M --> C
-  S --> C
-  D --> C
-  C --> F[종합 작성과 주장 검증 · synthesis]
-  F --> R[출처 대조와 내용 검토 · review]
-  R --> V{final_check}
-  V -->|검토 대기| W[검토용 초안 저장 · save_draft]
-  W -->|검토 결과 반영 후 재개| R
-  V -->|미해결 오류| X[failed 오류와 로그 저장 · fail]
-  V -->|통과| G[Markdown 생성 · report]
-  G --> Z[레이아웃 확인 후 제출본 저장 · publish]
+  S[setup] --> R[research]
+  R --> O[orchestrator · 계획]
+  O -.->|Send × Task 수| W[worker]
+  O -.->|계획 비면| P
+  W --> C[collect_evidence · Fan-in]
+  C --> Y[synthesis]
+  Y --> G[report]
+  G --> Q{quality_eval}
+  Q -.->|근거 문제 · 재계획| O
+  Q -.->|종합 문제| Y
+  Q -.->|보고서 문제 · 구버전| G
+  Q -.->|통과 + --human-review| H[human_review ⏸]
+  Q -.->|통과 · 상한 도달| P[publish]
+  H -->|--resume| A[apply_review]
+  A -.->|부결 있음| Y
+  A -.->|부결 없음| P
 ```
 
-설계서 부록 A의 그래프 소스를 그대로 옮긴 것이다. **조건부 엣지는 `final_check` 하나뿐**이고,
-되돌아오는 엣지는 `save_draft → review`(검토 결과 반영 후 재개) 하나뿐이다. 재시도는 노드
-내부의 최대 1회 처리다.
+</details>
+
+실선은 고정 엣지, 점선은 조건부 엣지(`dispatch`·`route_after_eval`·`route_after_review`)입니다.
+**Worker 목록이 코드에 없습니다** — Worker 수는 계획의 길이로 실행 시점에 정해집니다. 실제 출력은
+[docs/agent/graph.md](docs/agent/graph.md)(`draw_mermaid()`) 에 있습니다.
+
+---
 
 ## Directory Structure
 
 ```
 ├── data/                    # 문서 풀 (원문 raw/, 해시·쪽수 manifest.json)
 ├── src/
-│   ├── agents/              # Agent 모듈 (research/maturity/market/stakeholder/domain/synthesis/report)
+│   ├── agents/              # Agent 모듈 (research/maturity/market/stakeholder/domain/synthesis/report/worker)
+│   ├── orchestrator/        # 계획(planner)·dispatch·결과 선택·품질 평가(evaluator·quality_rules)·publish guard
 │   ├── rag/                 # 청킹·임베딩·인덱스·검색
 │   ├── tools/               # 색인 검색, 웹 검색/수집
 │   ├── output/              # 인용 검증, 내용 검토, 참고문헌, PDF 생성
 │   ├── schema.py            # 공용 계약 (Claim/Assessment/Source/Evidence/Gap/Synthesis/Event)
-│   ├── state.py             # State (설계서 §7 표 14행 / 17필드)
+│   ├── state.py             # State (설계서 §7 17필드 + Orchestrator-Workers 제어·페이로드 필드)
+│   ├── observability.py     # 결정 로그 (decisions.jsonl)
 │   └── graph.py             # LangGraph 배선
 ├── eval/                    # 검색 품질 평가 (golden set, Hit@K/MRR@K)
+├── scripts/                 # 원문 수집·인덱스 점검·τ 보정·검토 열람
+├── tests/                   # pytest (단위·통합)
 ├── reviews/verdicts.json    # 내용 검토 판정 원장 (커밋 대상)
 ├── config/settings.yaml     # 실행 설정
-├── runs/                    # run_id별 실행 스냅샷·결과·trace (Git 제외)
+├── runs/                    # 실행 결과 저장 (= 템플릿의 outputs/). run_id별 스냅샷·보고서·trace (Git 제외)
 ├── app.py                   # 실행 스크립트
 └── README.md
 ```
 
----
-
-## 실행
-
-### 0. 준비
-
-```bash
-uv sync                          # 파이프라인 의존성
-uv sync --extra pdf              # PDF 제출본까지 만들 때만
-brew install pango               # macOS. weasyprint 가 libpango 를 요구한다
-cp .env.example .env
-```
-
-`.env` 에 키 두 개가 필요하다. **둘 다 없으면 실행이 시작되지 않는다.**
-
-| 키 | 쓰는 곳 | 없으면 |
-|---|---|---|
-| `OPENAI_API_KEY` | 기술 조사·TRL·시장성·도메인·이해관계자·종합 | `get_llm()` 이 `OpenAIError` 로 즉시 중단 |
-| `TAVILY_API_KEY` | 이해관계자 노드의 웹 검색 | stakeholder 가 `status=failed` → 실행 전체 failed |
-
-`pango` 가 없어도 파이프라인은 정상 종료한다. Markdown 까지만 나오고 그 사실이
-`runs/<run_id>/submission.json` 에 남는다.
-
-### 1. 원문 수집 (최초 1회)
-
-```bash
-uv run python scripts/prepare_sources.py            # 기본: 해시만 검증 (재수집 안 함)
-uv run python scripts/prepare_sources.py --refresh  # 원문 재수집 + 매니페스트 갱신
-```
-
-`data/raw/` 에 원문이, `data/manifest.json` 에 해시·분량 기록이 생긴다. 원문은 Git 에서
-제외한다(15MB).
-
-> **`--refresh` 는 함부로 쓰지 마라.** 원문이 바뀌면 청크가 바뀌고 `chunk_id` 가 전부
-> 달라진다. 이전 실행의 인용이 가리키던 원문이 사라지고 `eval/goldenset.json` 라벨도
-> 다시 해야 한다. 실제로 `turboquant-blog` 원문이 한 번 바뀐 적이 있다.
-
-### 2. 인덱스 점검 (선택, API 키 불필요)
-
-```bash
-uv run python -m scripts.ingest
-```
-
-수집 → 200쪽 가드 → 청킹 → 컬렉션 분리 → 기술별 필터를 한 번에 확인한다.
-
-### 3. 파이프라인 실행
-
-```bash
-uv run python app.py
-```
-
-`setup` 이 원문 SHA-256 을 매니페스트와 대조한다(설계서 §3). 어긋나면 경고를 출력하고
-**실행을 중단한다** — 의도한 갱신이면 `--refresh` 로 매니페스트를 다시 만든다.
-
-**검증을 통과하면 첫 실행은 검토 대기로 멈춘다.** 실패가 아니다. 설계서 §8 이 *이 과정은
-ID 대조만으로 자동 통과시키지 않는다. 팀원이 주장과 근거를 나란히 보고 확인한다* 라고
-정한다. 이 단계에서는 보고서도 PDF 도 나오지 않는다.
-
-Assessment 중 하나라도 `failed` 거나 미해결 인용 오류가 남으면 **검토 기회 없이
-`failed` 로 끝난다** — `final_check` 가 failed 를 검토 대기보다 먼저 본다(§7).
-사유는 `runs/<run_id>/run.json` 과 `validation-errors.json` 에 있다.
-
-```
-검토 대기 — Claim 14건. runs/<run_id>/review.csv 의 review_result(확인|부결)·reviewer 를 채운 뒤
-  uv run python app.py --resume <run_id>
-```
-
-### 4. 내용 검토
-
-주장과 근거를 나란히 읽는다.
-
-```bash
-uv run python -m scripts.review_reader <run_id> --pending
-uv run python -m scripts.review_reader <run_id> --claim <claim_id>   # 하나만
-```
-
-`runs/<run_id>/review.csv` 의 **마지막 세 열**만 채운다. 앞 열은 읽기용이다.
-
-| 열 | 값 |
-|---|---|
-| `review_result` | `확인` 또는 `부결` (`통과`·`승인`·`ok` / `반려`·`reject` 도 받는다) |
-| `reviewer` | 검토자 이름 |
-| `review_comment` | 사유. **부결이면 보고서 §6 에 그대로 실린다** |
-
-한 `claim_id` 당 **한 행만** 채우면 된다(같은 Claim 이 근거 수만큼 행을 갖는다).
-값이 `확인`/`부결` 어느 쪽도 아니면 *판정 값 미상* 오류로 실행이 `failed` 가 된다.
-
-§8 이 요구하는 확인 항목 — **성능 수치의 단위·비교 기준선·실험 조건, TRL 단계의 근거,
-직접 채택과 인접 생태계 자료의 구분.**
-
-### 5. 재개 → 보고서 + 제출본
-
-```bash
-uv run python app.py --resume <run_id>
-```
-
-| 산출물 | 경로 |
-|---|---|
-| 보고서 Markdown | `runs/<run_id>/report.md` |
-| 제출본 PDF | `runs/<run_id>/final/RAG-Output_판교_8반_….pdf` |
-| 생성 여부와 사유 | `runs/<run_id>/submission.json` |
-| 검토 기록 | `runs/<run_id>/review.csv` |
-| 실행 기록 | `runs/<run_id>/run.json` · `trace.jsonl` · `state.json` |
-
-PDF 는 **검증을 통과했을 때만** 나온다(§8 — 무효 인용이 남으면 제출용 출력을 막는다).
-품질 점검(SUMMARY 분량·한글 글꼴·표 잘림·참고문헌 위치, §9)에 걸려도 만들지 않는다.
-왜 안 나왔는지는 `submission.json` 에 적힌다.
-
-### run_status 읽는 법
-
-| 값 | 뜻 |
-|---|---|
-| `completed` | 모든 Assessment 가 completed 이고 내용 검토를 통과했다 (근거 공백은 있을 수 있다) |
-| `partial` | 검토 대기로 멈췄거나, 근거 공백이 남은 채 보고서를 냈다 |
-| `failed` | Assessment 중 failed, 미해결 인용 오류, 병합 오류 |
-
-### 모델 설정
-
-`config/settings.yaml` 의 `llm.model` 이 기본값이고 `.env` 의 `LLM_MODEL` 이 우선한다.
-실제로 적용된 `temperature`·`seed`·토큰 사용량은 `runs/<run_id>/run.json` 의 `llm` 에
-기록된다(설정 파일 값과 다를 수 있다 — 아래 재현성 절 참고).
-
-> 기본 모델은 `gpt-4.1-mini` 다. 로컬 `.env` 에 예전 `LLM_MODEL` 값이 남아 있으면 그쪽이
-> 우선하므로 지우거나 비워 둘 것.
+프롬프트는 별도 `prompts/` 폴더 없이 각 에이전트 모듈 안에 있습니다.
 
 ---
 
-## 테스트
+## Usage
 
 ```bash
-uv sync
-uv run pytest -q          # 162 passed — API 키·원문(data/raw/) 없이 돈다
+uv sync                                   # 의존성 (PDF 제출본: uv sync --extra pdf + brew install pango)
+cp .env.example .env                      # OPENAI_API_KEY · TAVILY_API_KEY
+uv run python scripts/prepare_sources.py  # 원문 수집·해시 검증 (최초 1회)
+uv run python app.py                      # 실행 — 품질 평가 통과 시 발행
+uv run python app.py --human-review       # 통과 후 사람 검토(review.csv)에서 멈춤
+uv run python app.py --resume <run_id>    # 검토를 채운 뒤 재개
 ```
 
-LLM·웹 검색·임베딩 색인·원문 해시 대조를 fixture 로 막고 계약만 본다. 푸시와 PR 마다
-GitHub Actions 가 같은 명령을 돌린다([.github/workflows/test.yml](.github/workflows/test.yml)).
-
-| 층 | 파일 | 보는 것 |
-|---|---|---|
-| 단위 | `test_r1_*` ~ `test_r5_*` | 역할별 노드·검색·인용 검증·검토·제출본 |
-| 통합 | `test_integration_graph.py` | 실물 노드로 그래프를 끝까지 돌려 R1~R5 계약이 맞물리는지 (`stakeholder` 만 stub) |
-
-통합 테스트를 따로 둔 이유: 역할별 코드가 모두 main 에 들어오고 단위 테스트 82개가
-통과했는데도 **파이프라인은 한 번도 끝까지 돈 적이 없었다.** 각 테스트가 손으로 만든
-state 로 자기 함수만 불렀기 때문이다. 그중 검증 결과가 State 에 실리지 않아
-`final_check` 가 무효 인용을 못 보고 `completed` 로 끝나는 버그는 죽지 않고 조용히
-통과했다. 경위와 수정 단계는 [docs/fix-interface-plan.md](docs/fix-interface-plan.md).
+결과는 `runs/<run_id>/` 에 남습니다 — 보고서 `report.md`, 제출본 `final/*.pdf`, 품질 평가
+`quality-v<N>.json`, 결정 로그 `decisions.jsonl`. 원문 해시가 매니페스트와 어긋나면 `setup` 이
+실행을 중단합니다. 키가 없을 때의 동작, 검토 CSV 작성법, 산출물 전체, 모델 설정, 그 밖의 옵션
+(`--run-id`·`--domain`·`--no-carry-review`)은 [docs/run-notes.md](docs/run-notes.md#실행-매뉴얼) 에 있습니다.
 
 ---
 
-## 재현성 — 어디까지 되고 어디부터 안 되는가
+## Tests
 
-**같은 보고서가 다시 나오지 않는다.** 이 파이프라인은 그것을 목표로 하지 않는다.
+```bash
+uv run pytest -q   # 288 passed — API 키·원문(data/raw/) 없이 돈다
+```
 
-| 단계 | 재현 |
-|---|---|
-| 원문 → 청킹 → 임베딩 → 인덱스 | ✅ 코퍼스 해시와 임베딩 revision 이 고정돼 있다 |
-| 검색 결과 · `chunk_id` | ✅ 같은 인덱스면 동일 |
-| **주장 문장** | ❌ 모델이 매 실행 다시 쓴다 |
-| **이해관계자 근거** | ❌ 매 실행 웹을 새로 검색한다 |
-
-측정값: 같은 코퍼스로 두 번 돌렸을 때 `maturity` 노드가 **인용 근거 5건이 완전히 같은데
-본문 유사도 0.258** 이었다. 당시 기본 모델이던 `gpt-5.6-luna` 에 대해 `langchain_openai` 가
-`temperature` 를 보내지 않고(추론형 모델로 취급) `seed` 도 무시되기 때문이었다. 현재 기본
-모델 `gpt-4.1-mini` 는 temperature=0·seed 가 전달되지만 OpenAI 의 seed 는 best-effort 라
-문장 동일성은 여전히 보장되지 않는다. 조사 기록은
-[docs/reproducibility-plan.md](docs/reproducibility-plan.md).
-
-**클론한 사람이 같은 결과를 얻을 수 없다.** `data/raw/`(원문)와 `.cache/`(모델 응답
-캐시)가 Git 에서 제외되고, 웹 검색 결과는 애초에 매일 바뀐다. 검증이 목적이라면 재실행이
-아니라 `runs/<run_id>/` 의 보고서·근거·검토 기록을 직접 보는 쪽이 맞다.
-
-### 재검토를 줄이는 두 장치
-
-둘 다 재현성의 대체재가 아니라 **사람의 시간을 아끼는 안전망**이다.
-
-**검토 판정 원장** `reviews/verdicts.json` (Git 에 커밋된다)
-재개가 끝나면 판정이 자동으로 쌓인다. 다음 실행에서 **node·technology·kind·주장 문장·
-인용 근거가 모두 같은** Claim 만 판정을 물려받는다. 한 글자라도 다르면 사람이 읽은 것이
-아니므로 미판정으로 남는다. 이월된 판정은 보고서 §6 에 건수와 출처 run_id 가 공시된다.
-전부 새로 검토하려면 `--no-carry-review`.
-
-**모델 응답 캐시** `.cache/llm.sqlite` (Git 제외, 기계마다 따로 쌓인다)
-키가 프롬프트 전문 + 모델 파라미터다. 같은 코퍼스·같은 지시문이면 같은 응답이 나온다.
-프롬프트를 고치면 자동으로 새로 생성한다. 적중 수는 `run.json` 의 `llm` 과 보고서 §6 에
-남는다 — 적중은 *이번 실행에서 모델이 새로 판단하지 않았다* 는 뜻이다.
-
-이해관계자 노드는 매 실행 웹을 새로 조사하므로 **프롬프트가 달라져 캐시가 적중하지 않고,
-그 Claim 들은 매번 새로 검토해야 한다.**
+푸시와 PR 마다 GitHub Actions 가 같은 명령을 돌립니다. 테스트 구성은
+[docs/run-notes.md](docs/run-notes.md#테스트-구성).
 
 ---
 
-## 보고서 목차
+## Limitations
 
-```
-SUMMARY            핵심 평가 결과, ½쪽 이내 (전체 목록은 §5·§6)
-1. 분석 배경
-2. 기술 선정
-3. 기술 개요
-4. 관점별 평가      4.1 TRL  4.2 시장성  4.3 이해관계자  4.4 도메인
-5. 시사점          5.1 일치  5.2 차이·상충  5.3 결합 가설(추론)
-6. 한계            근거 공백(관점별) · 조사 시점과 검토 범위 · 분석의 한계
-REFERENCE          [A] Doc Pool 논문  [B] 풀 밖 색인(ecosystem·context)  [C] 웹 조회
-```
-
-본문 인용은 REFERENCE 번호(`[1]`)로 찍히고, 번호는 제목·arXiv 버전·**인용 페이지**·URL 로
-연결된다(§9). 사실 주장은 본문만 싣고 **추론·가설만** 전제와 함께 표시한다(§6).
-
-**REFERENCE 3구분 이유** — 설계서 §9는 "Doc Pool 논문만"이라 쓰고 §3·§6은 웹 자료도
-인용한다고 쓴다. 그대로 두면 본문 인용이 참고문헌에 연결되지 않는다. [B]는 색인 대상이라
-200쪽 가드에 포함되고, [C]는 색인하지 않으므로 무관하다.
+- Generator 와 Judge 가 같은 모델(gpt-4.1-mini)입니다. Judge 는 층화 표본(`quality.judge_sample` 60건)만 봅니다.
+- 계획의 개수는 결정적 규칙이지만 focus·질의 문장은 LLM 이 써서 실행마다 달라질 수 있습니다.
+- 체크포인트가 `InMemorySaver` 라 프로세스 간 재개는 사람 검토 재개(`state.json`)만 지원합니다.
+- 칸 단위로 결과를 교체하므로, 재조사에서 다시 나오지 않은 기존 Claim 은 보고서에서 빠집니다.
+- 편향 기준 임계값(묶음 ≥ 2, 비중 ≤ 60%)은 작은 코퍼스(문서 10건)에서 실측 보정 전입니다.
 
 ---
 
@@ -329,15 +259,15 @@ REFERENCE          [A] Doc Pool 논문  [B] 풀 밖 색인(ecosystem·context)  
 
 | 이름 | 담당 | 주요 산출물 |
 |---|---|---|
-| 김민 | Graph & Runtime · 통합 | State(§7 14행/17필드), 공용 `schema.py`, LangGraph 배선, run_id 기반 실행 제어, 인터페이스 정합과 통합 테스트(#13), CI |
-| 권수진 | RAG 인프라 | 3 컬렉션 구성(excerpt 페이징), SHA-256·쪽수 매니페스트, 표/수식 깨짐 검토 마킹, 검색 평가셋 |
+| 김민 | Orchestrator · Graph & Runtime | Orchestrator 설계(동적 계획·Dynamic Fan-out·재계획), Worker 어댑터·Fallback, 그래프·State 통합, 실행·트레이스, CI |
+| 권예리 | Worker 에이전트 | Task 기반 조사로 에이전트 전환, 근거 수집·웹 수집 분리, 공통 함수 정리, 기술조사·TRL 규칙표·도메인 노드 |
+| 권수진 | 품질 평가·발행 | 종합·보고서 생성, 품질 평가 노드(Hybrid)·재작업 라우팅, 발행·분량 관리, Human Review / RAG 인프라(3 컬렉션, 매니페스트) |
 | 정승원 | 검색 계층·시장성·이해관계자 | dense 코사인 검색, 역할별 컬렉션·관점 잠금, 웹 근거 수집·스냅샷, 이해관계자 평가 노드 |
-| 권예리 | 평가 에이전트 | 기술조사·TRL 규칙표·도메인 노드, 검색 품질 실측 스크립트 |
-| 박인기 | 종합·출력 | 구조 강제 종합, 인용 검증, 내용 검토 worksheet, REFERENCE 3구분, PDF 생성 |
+| 박인기 | 출력·인용 검증 | 구조 강제 종합, 인용 검증, 내용 검토 worksheet, REFERENCE 3구분, PDF 생성 |
 
 ---
 
-## 참고자료
+## References
 
 - TurboQuant. arXiv:2504.19874 (2025-04) · ITME. arXiv:2606.12556 (2026-06)
 - KIVI. ICML 2024, arXiv:2402.02750 · InfiniGen. OSDI 2024, arXiv:2406.19707
