@@ -1,57 +1,55 @@
-"""그래프 배선 — 담당: R1 (설계서 §8, 부록 A 그래프 소스 그대로)
+"""그래프 배선 — 담당 A (Orchestrator-Workers, 계획서 §4)
 
-    setup → research → [maturity ‖ market ‖ stakeholder ‖ domain_assessment]
-          → collect_evidence → synthesis → review → final_check
-                                             ↑            ├ 검토 대기  → save_draft ─┐
-                                             └────────────────────────────────────────┘
-                                                          ├ 미해결 오류 → fail  → END
-                                                          └ 통과       → report → publish → END
+    setup → research → orchestrator ─(dispatch: Send × len(plan))→ worker ─→ collect_evidence
+          → synthesis → report → quality_eval ─(route_after_eval)→ orchestrator | synthesis
+                                                                  | report | human_review | publish
+    human_review ⏸ → apply_review ─(route_after_review)→ synthesis | publish
+    publish → END
 
-**재시도는 노드 내부의 최대 1회 처리다**(부록 A). 그래서 조건부 엣지는 `final_check`
-하나뿐이다. `final_check` 는 인용 오류와 사람의 내용 검토 완료 여부를 함께 확인한다.
-
-검토 대기는 초안을 저장하고 **내용 검토(`review`)로 되돌아간다.** 사람이 검토 결과를
-반영해야 진행되므로 `save_draft` 뒤에서 실행을 멈춘다(`interrupt_after`). 재개는 고친
-초안을 들고 `build_graph(start="review")` 로 다시 들어온다.
+- **Worker 목록이 코드에 없다.** orchestrator 가 research 결과로 조사 계획(`plan`)을 세우고,
+  `dispatch` 가 Task 마다 `Send("worker", ...)` 로 Worker 를 띄운다. Worker 수 = 계획의 길이.
+- `worker` 노드 하나가 Task 의 관점으로 기존 에이전트를 고른다. 예외는 Worker 가 잡아 실패
+  결과로 바꾼다 — 병렬 Worker 하나의 예외가 그래프를 멈추지 않는다(그래프 레벨 Fallback).
+- `Send` 로 띄운 Worker 가 모두 끝나면 `collect_evidence` 가 한 번 실행된다(Fan-in).
+  기존 병합 로직(`_merge_one`)은 그대로 쓰고, 입력만 누적된 Worker 결과에서 고른다.
+- 품질 평가(`quality_eval`) 뒤 다음 노드는 `quality_eval["next"]` 가 정한다(담당 C).
+- 계획이 비면(재계획할 대상 없음) `dispatch` 가 바로 `publish` 로 보낸다.
+- Human Review 는 선택 단계다(`run_config.human_review`, `app.py --human-review`). 품질 평가를
+  통과하면 `human_review` 가 worksheet 를 만들고 그 뒤에서 멈춘다(`interrupt_after`). 사람이
+  판정을 채우면 `resume` 이 저장된 State 로 이어 `apply_review` 부터 돈다.
 
 병합 오류는 분기가 아니라 `collect_evidence` 의 예외다. 같은 ID 에 다른 내용이 들어오면
-어느 원문을 가리키는지 고를 근거가 없다(설계서 §7). 어긋난 근거로 종합·검토에 LLM 을
-태우지 않고 실행을 끝낸다.
+어느 원문을 가리키는지 고를 근거가 없다(설계서 §7). 관점 결과가 비는 것은 오류가 아니라
+근거 공백이다 — Worker 실패는 execution_gap 으로 남고 품질 평가가 재계획을 정한다.
 """
 
 import hashlib
-import json
 from pathlib import Path
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from pydantic import ValidationError
 
-from src.agents.domain import domain_assessment
-from src.agents.market import market
-from src.agents.maturity import maturity
+from src.agents.common import event
 from src.agents.report import report
 from src.agents.research import research
-from src.agents.stakeholder import stakeholder
 from src.agents.synthesis import synthesis
+from src.agents.worker import make_worker
+from src.orchestrator.dispatch import dispatch
+from src.observability import log_decision
+from src.orchestrator.evaluator import apply_review, quality_eval, route_after_eval, route_after_review
+from src.orchestrator.planner import orchestrator
+from src.orchestrator.selection import select_active_worker_results
+from src.output import validate
 from src.output.pdf import publish
-from src.output.review import review
-from src.schema import Assessment
+from src.schema import ASSESSMENT_ROLES, PERSPECTIVES, Assessment
+from src.settings import settings
 from src.state import ReportState, run_dir
-from src.tools.web_store import save_json, utcnow
-
-FANOUT = ["maturity", "market", "stakeholder", "domain_assessment"]
-# 합류 단계에서 모든 자료를 모은다(§6). 참고문헌을 실제 인용에서 역으로 만들려면
-# 기술 조사 단계의 근거도 레지스트리에 있어야 한다(§9).
-MERGED = ["research"] + FANOUT
+from src.tools.web_store import save_json
 
 
 class MergeConflict(Exception):
     """같은 ID 에 다른 내용이 들어왔다. 인용이 어느 원문을 가리키는지 알 수 없어 실행을 끝낸다."""
-
-
-def event(node, status="ok", **fields) -> dict:
-    return dict(node=node, status=status, attempt=1, timestamp=utcnow(), **fields)
 
 
 # ── R1 소유 노드 ────────────────────────────────────────────────────────────
@@ -138,16 +136,23 @@ def _merge_one(store: dict, item: dict, id_field: str, node: str) -> list[str]:
 
 
 def collect_evidence(state) -> dict:
-    """다섯 Assessment 의 출처와 근거를 한 번에 병합한다. **검증은 여기서 한 번만.**
+    """Fan-in. 누적된 Worker 결과에서 지금 쓸 결과를 골라 관점별 Assessment 로 조립하고,
+    출처와 근거를 한 번에 병합한다. **검증은 여기서 한 번만.**
 
-    같은 ID 에 다른 내용이 오면 병합 오류다(§7). 어느 쪽이 맞는지 고를 근거가 없고,
-    조용히 덮어쓰면 내용 검토가 엉뚱한 원문을 대조하게 된다.
+    조립한 관점별 Assessment 는 State 의 `maturity`·`market`·`stakeholder`·`domain_assessment`
+    키에 쓴다 — synthesis·report·reference·validate 가 지금처럼 `state[역할]` 로 읽는다.
+    같은 ID 에 다른 내용이 오면 병합 오류다(§7). 관점이 비는 것은 Gap 이다.
     """
+    selected = select_active_worker_results(state.get("worker_results") or [],
+                                            state.get("claim_flags"))
+    assessments = {"research": state.get("research")} | selected["assessments"]
+
     sources, evidence, gaps, errors = {}, {}, [], []
-    for name in MERGED:
-        raw = state.get(name)
+    for name in ASSESSMENT_ROLES:
+        raw = assessments.get(name)
         if not raw:
-            errors.append(f"{name}: Assessment 가 없다")
+            if name == "research":
+                errors.append("research: Assessment 가 없다")   # 계획의 입력이라 빠지면 버그다
             continue
         try:
             assessment = Assessment.model_validate(raw).model_dump()
@@ -159,126 +164,102 @@ def collect_evidence(state) -> dict:
             for item in assessment[key]:
                 errors.extend(_merge_one(store, item, id_field, name))
         gaps.extend(assessment["gaps"])
+    gaps.extend(selected["cell_gaps"])
 
     if errors:
         save_json(run_dir(state) / "merge-errors.json", {"errors": errors})
         raise MergeConflict("; ".join(errors))
 
-    return {"source_registry": sources, "evidence_registry": evidence, "gaps": gaps,
-            "trace": [event("collect_evidence", sources=len(sources),
-                            evidence=len(evidence), gaps=len(gaps))]}
+    perspectives = {name: selected["assessments"][name]
+                    for name in PERSPECTIVES if name in selected["assessments"]}
+    # synthesis·report 가 아직 validation 을 읽는다(담당 C 가 옮기기 전까지 유지).
+    checked = validate.check(state | perspectives)
+    failed = selected["failed"]
+    last_error = "; ".join(f"{r['task']['task_id']}: {r['error']}" for r in failed)
+    return perspectives | {
+        "source_registry": sources, "evidence_registry": evidence, "gaps": gaps,
+        "validation": checked["validation"], "last_error": last_error,
+        "trace": [event("collect_evidence", sources=len(sources), evidence=len(evidence),
+                        gaps=len(gaps), failed_workers=len(failed))]}
 
 
-def final_check(state) -> dict:
-    """인용 오류와 사람의 내용 검토 완료 여부를 함께 확인하고 run_status 를 판정한다(부록 A)."""
-    statuses = {state.get(name, {}).get("status") for name in MERGED}
-    errors = (state.get("validation") or {}).get("errors")
-    if "failed" in statuses or errors:
-        status = "failed"          # 구조 오류나 미해결 인용 오류가 남은 경우(§7)
-    elif state.get("review_status") == "pending" or "partial" in statuses:
-        status = "partial"         # 일부 항목을 평가 보류로 남겼거나 내용 검토가 끝나지 않았다
-    else:
-        status = "completed"
-    return {"run_status": status,
-            "trace": [event("final_check", status, review_status=state.get("review_status", ""))]}
+def human_review(state) -> dict:
+    """선택 단계. 보고서에 표시된 Claim 으로 worksheet(`runs/<run_id>/review.csv`)를 만든다.
 
-
-def route_after_final(state) -> str:
-    if state["run_status"] == "failed":
-        return "fail"
-    if state.get("review_status") == "pending":
-        return "save_draft"
-    return "report"
-
-
-def save_draft(state) -> dict:
-    """검토용 초안만 저장한다(§7). 제출본과 다른 경로에 둔다(§8).
-
-    다음 엣지는 `review` 로 돌아가지만 사람의 검토 결과가 있어야 진행되므로
-    여기서 실행이 멈춘다(`interrupt_after`). 재개는 `app.py --resume <run_id>`.
+    그래프는 이 노드 **뒤에서** 멈춘다. 멈추기 전에 worksheet 가 있어야 사람이 판정을 적을 수 있다.
+    앞서 채운 판정과 원장(reviews/verdicts.json)의 같은 주장·근거 판정은 이어 받는다(담당 C).
     """
-    draft = {k: v for k, v in state.items() if k != "trace"}
-    save_json(run_dir(state) / "draft.json", draft)
-    return {"trace": [event("save_draft", "partial", path=str(run_dir(state) / "draft.json"))]}
+    from src.output import review
 
-
-def fail(state) -> dict:
-    """미해결 오류. 오류와 로그를 저장하고 제출용 출력을 막는다(§8).
-
-    `report` 를 쓰지 않는다 — 실패한 실행이 보고서 자리를 차지하면 안 된다.
-    """
-    validation = state.get("validation") or {}
-    save_json(run_dir(state) / "validation-errors.json", validation)
-    return {"trace": [event("fail", "failed", errors=validation.get("errors", []))]}
-
-
-def _pending(name, owner):
-    """아직 새 계약으로 이행하지 않은 노드 자리. 실행하면 담당과 이유를 말하고 멈춘다."""
-    def node(state):
-        raise NotImplementedError(
-            f"{name} 는 {owner} 가 schema.Assessment 계약으로 이행해야 한다. "
-            f"build_graph({name}=...) 로 mock 을 주입해 실행한다")
-    return node
+    path, carried = review.prepare_worksheet(state)
+    decision = log_decision(state, "human_review", "apply_review",
+                            "품질 평가 통과 — 사람 검토 대기", worksheet=str(path),
+                            carried=carried, report_version=state.get("report_version"))
+    return {"last_decision": decision,
+            "trace": [event("human_review", "paused", worksheet=str(path), carried=len(carried))]}
 
 
 DEFAULT_NODES = {
-    "setup": setup,                      # R1
-    "research": research,                # R4
-    "maturity": maturity,                # R4
-    "market": market,                    # R4
-    "stakeholder": stakeholder,          # R3
-    "domain_assessment": domain_assessment,   # R4
-    "collect_evidence": collect_evidence,     # R1
-    "synthesis": synthesis,              # R5
-    "review": review,                    # R5 — 형식 검사 + 사람의 내용 검토
-    "final_check": final_check,          # R1
-    "save_draft": save_draft,            # R1
-    "fail": fail,                        # R1
-    "report": report,                    # R5
-    "publish": publish,                  # R5 — 레이아웃 확인 후 제출본 저장
+    "setup": setup,                      # A
+    "research": research,                # B — 계획의 입력이 되는 선행 조사
+    "orchestrator": orchestrator,        # A — 계획
+    "collect_evidence": collect_evidence,     # A — Fan-in
+    "synthesis": synthesis,              # C
+    "report": report,                    # C
+    "quality_eval": quality_eval,        # C — 품질 평가, 다음 노드 결정
+    "human_review": human_review,        # A — 선택 단계, 이 노드 뒤에서 멈춘다
+    "apply_review": apply_review,        # C — 사람 판정 반영
+    "publish": publish,                  # C
 }
 
 
-def build_graph(start="setup", **overrides):
-    """노드 함수를 이름으로 갈아끼운다. R4·R5 이행 전에는 mock 을 주입해 전 경로를 돌린다.
-
-    `start="review"` 는 재개용이다(부록 A 의 `검토 결과 반영 후 재개`). 사람이 draft.json 의
-    검토 결과를 반영해 두었으므로 평가·종합을 다시 돌리지 않고 내용 검토부터 이어 간다.
-    """
-    nodes = DEFAULT_NODES | overrides
+def build_graph(workers: dict | None = None, **overrides):
+    """노드 함수를 이름으로 갈아끼운다. `workers` 는 Worker 가 부를 에이전트를 관점별로 바꾼다."""
+    nodes = DEFAULT_NODES | {"worker": make_worker(workers)} | overrides
     b = StateGraph(ReportState)
     for name, fn in nodes.items():
         b.add_node(name, fn)
 
-    b.add_edge(START, start)
+    b.add_edge(START, "setup")
     b.add_edge("setup", "research")
-    for name in FANOUT:
-        b.add_edge("research", name)          # fan-out
-    b.add_edge(FANOUT, "collect_evidence")    # 넷이 모두 끝나야 병합·종합을 시작한다(§8)
+    b.add_edge("research", "orchestrator")
+    b.add_conditional_edges("orchestrator", dispatch, ["worker", "publish"])
+    b.add_edge("worker", "collect_evidence")      # Send 로 띄운 worker 가 전부 끝나야 실행된다
     b.add_edge("collect_evidence", "synthesis")
-    b.add_edge("synthesis", "review")
-    b.add_edge("review", "final_check")
-    b.add_conditional_edges("final_check", route_after_final,
-                            ["report", "save_draft", "fail"])
-    b.add_edge("save_draft", "review")        # 검토 결과 반영 후 재개(부록 A)
-    b.add_edge("report", "publish")
+    b.add_edge("synthesis", "report")
+    b.add_edge("report", "quality_eval")
+    b.add_conditional_edges("quality_eval", route_after_eval,
+                            ["orchestrator", "synthesis", "report", "human_review", "publish"])
+    b.add_edge("human_review", "apply_review")
+    b.add_conditional_edges("apply_review", route_after_review, ["synthesis", "publish"])
     b.add_edge("publish", END)
-    b.add_edge("fail", END)
-    # save_draft 뒤에서 멈춘다. 사람의 검토 없이 review 로 돌아가면 무한히 돈다.
-    return b.compile(checkpointer=InMemorySaver(), interrupt_after=["save_draft"])
+    return b.compile(checkpointer=InMemorySaver(), interrupt_after=["human_review"])
+
+
+def _config(run_id: str) -> dict:
+    """실행 하나가 스레드 하나다. run_id 가 thread_id·LangSmith metadata 를 잇는 상관 키다."""
+    return {"configurable": {"thread_id": run_id},
+            "recursion_limit": settings()["orchestrator"]["recursion_limit"],
+            "run_name": "kv-cache-orchestrator-workers",
+            "tags": ["orchestrator-workers"],
+            "metadata": {"run_id": run_id}}
 
 
 def invoke(graph, state):
-    """checkpointer 를 붙였으므로 thread_id 가 필요하다. 실행 하나가 스레드 하나다."""
-    thread = state.get("run_id") or "unknown"
-    return graph.invoke(state, config={"configurable": {"thread_id": thread}})
+    return graph.invoke(state, config=_config(state.get("run_id") or "unknown"))
 
 
-def resume_state(run_id, runs_dir="runs") -> dict:
-    """save_draft 가 남긴 초안을 초기 State 로 되돌린다.
+def awaiting_review(graph, run_id: str) -> bool:
+    """`human_review` 뒤에서 멈췄는가 — 다음 실행할 노드가 apply_review 다."""
+    return "apply_review" in graph.get_state(_config(run_id)).next
 
-    사람은 이 draft.json 의 `validation` · `review_status` 를 직접 고쳐 검토 결과를 넣는다.
-    그게 재개의 입력이다. `review_status` 가 pending 이면 다시 초안 저장에서 멈춘다.
+
+def resume(graph, state):
+    """human_review 에서 멈춘 실행을 저장된 State 로 이어 돌린다(`app.py --resume`).
+
+    체크포인트(InMemorySaver)는 프로세스와 함께 사라진다. 멈출 때 남긴 State 를 새 스레드에
+    human_review 가 쓴 것으로 올리면 다음 노드가 apply_review 가 된다 — 검토 전 단계는 다시 돌지 않는다.
     """
-    draft = json.loads((Path(runs_dir) / run_id / "draft.json").read_text(encoding="utf-8"))
-    return draft | {"trace": []}
+    config = _config(state.get("run_id") or "unknown")
+    graph.update_state(config, state, as_node="human_review")
+    return graph.invoke(None, config)
