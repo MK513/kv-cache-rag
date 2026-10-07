@@ -60,6 +60,8 @@ class ReportState(TypedDict, total=False):
     retry_count: Annotated[int, "재계획 라운드 수 = 다음 Task 의 round. 상한 orchestrator.max_retry. orchestrator"]
     repair_count: Annotated[int, "synthesis·report 저비용 수리 횟수. 상한 orchestrator.max_repairs. quality_eval"]
     step_count: Annotated[int, "orchestrator·quality_eval 결정마다 +1. 상한 orchestrator.max_steps"]
+    guard_retry_count: Annotated[int, "publish guard 가 구버전을 막아 보고서를 다시 만든 횟수. "
+                                      "상한 orchestrator.max_guard_retries. quality_eval"]
     claim_flags: Annotated[dict, "{claim_id: {status: invalid|recheck, reason, by, at_report_version}}. quality_eval·apply_review"]
     last_decision: Annotated[dict, "최근 결정·사유 요약. 전문은 runs/<run_id>/decisions.jsonl"]
     last_error: Annotated[str, "가장 최근 실패 요약 (Worker 실패·Judge 실패·정합성 오류). collect_evidence"]

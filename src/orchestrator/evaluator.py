@@ -563,10 +563,32 @@ def _render(state: dict, version: int) -> tuple[str, str, int | None, str]:
 
 # ── 노드 ─────────────────────────────────────────────────────────────────────
 
+PUBLISH_SIDE = ("publish", "human_review")
+
+
 def _limits() -> dict:
     orch = settings().get("orchestrator") or {}
     return {"max_retry": int(orch.get("max_retry", 2)), "max_repairs": int(orch.get("max_repairs", 2)),
-            "max_steps": int(orch.get("max_steps", 12))}
+            "max_steps": int(orch.get("max_steps", 12)),
+            "max_guard_retries": int(orch.get("max_guard_retries", 2))}
+
+
+def _guard(state: dict, quality: dict, next_node: str, stop_reason: str) -> tuple[str, str, int]:
+    """발행 쪽으로 가기 전에 이번 평가 결과로 publish guard 를 본다. → (next, stop_reason, guard_retry_count)
+
+    구버전이면 보고서부터 다시 만든다. 조건부 엣지는 State 를 쓸 수 없어 횟수는 여기서 센다.
+    상한에 닿으면 publish 로 보내고, publish 가 같은 guard 로 제출본 없이 failed 로 끝낸다.
+    """
+    count = int(state.get("guard_retry_count") or 0)
+    if next_node not in PUBLISH_SIDE:
+        return next_node, stop_reason, count
+    stale = check_publish_guard(state | {"quality_eval": quality})
+    if not stale:
+        return next_node, stop_reason, count
+    limit = _limits()["max_guard_retries"]
+    if count < limit:
+        return "report", stop_reason, count + 1
+    return "publish", f"publish guard 구버전({', '.join(stale)}) — 보고서 재생성 {limit}회 소진", count
 
 
 def _route(state: dict, findings: Findings, judge_error: str, step: int) -> tuple[str, str, bool]:
@@ -637,6 +659,8 @@ def quality_eval(state) -> dict:
         verdicts={name: Verdict(**v) for name, v in findings.verdicts.items()},
         evaluated_report_version=version, pdf_path=pdf_path, pdf_sha256=pdf_sha, scope=scope,
     ).model_dump()
+    next_node, stop_reason, guard_count = _guard(state, quality, next_node, stop_reason)
+    quality["next"] = next_node
 
     flags = dict(state.get("claim_flags") or {}) | findings.flags
     repair_count = int(state.get("repair_count") or 0) + (1 if repair else 0)
@@ -644,16 +668,20 @@ def quality_eval(state) -> dict:
               quality | {"problems": findings.problems, "bias_metrics": metrics,
                          "new_flags": findings.flags, "stop_reason": stop_reason})
     failed = [name for name, v in findings.verdicts.items() if v["status"] == "fail"]
-    reason = ("모든 기준 통과" if passed else
+    guarded = guard_count > int(state.get("guard_retry_count") or 0)
+    reason = (f"publish guard 구버전 — 보고서 재생성 {guard_count}회째" if guarded else
+              stop_reason if stop_reason.startswith("publish guard") else
+              "모든 기준 통과" if passed else
               stop_reason or "; ".join(findings.problems["evidence"] + findings.problems["synthesis"]
                                        + findings.problems["report"])[:500])
     decision = log_decision(state, "quality_eval", next_node, reason, report_version=version,
                             failed=failed, passed=passed, round=state.get("retry_count", 0),
                             target_cells=sorted({c for v in findings.verdicts.values()
                                                  for c in v["target_cells"]}),
-                            invalidated=sorted(findings.flags), scope=scope)
+                            invalidated=sorted(findings.flags), scope=scope,
+                            guard_retry_count=guard_count)
     update = {"quality_eval": quality, "claim_flags": flags, "repair_count": repair_count,
-              "step_count": step, "last_decision": decision,
+              "step_count": step, "guard_retry_count": guard_count, "last_decision": decision,
               "trace": [event("quality_eval", "ok" if passed else "failed", next=next_node,
                               report_version=version, failed=failed, pages=pages,
                               invalidated=len(findings.flags))]}
@@ -665,11 +693,14 @@ def quality_eval(state) -> dict:
 def route_after_eval(state) -> str:
     """그래프 조건부 엣지. 판단은 quality_eval 이 했고 여기서는 결과를 읽는다.
 
-    발행 쪽(publish·human_review)으로 갈 때만 publish guard 를 본다. 종합만 바뀌어 보고서·평가가
-    구버전이면 보고서부터 다시 만든다(report → quality_eval). 같은 버전 파일 손상은 예외다.
+    발행 쪽(publish·human_review)으로 갈 때만 publish guard 를 다시 본다. 종합만 바뀌어 보고서·평가가
+    구버전이면 보고서부터 다시 만든다(report → quality_eval). 재생성 횟수는 quality_eval 이 세며
+    (`guard_retry_count`), 상한에 닿으면 publish 로 보내 publish 가 failed 로 끝낸다 — 같은 구버전
+    판정으로 보고서를 끝없이 다시 만들지 않는다. 같은 버전 파일 손상은 예외다.
     """
     nxt = state["quality_eval"]["next"]
-    if nxt in ("publish", "human_review") and check_publish_guard(state):
+    if nxt in PUBLISH_SIDE and check_publish_guard(state) and \
+            int(state.get("guard_retry_count") or 0) < _limits()["max_guard_retries"]:
         return "report"
     return nxt
 

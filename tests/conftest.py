@@ -52,3 +52,17 @@ def uncalibrated_tau(monkeypatch):
     from src.settings import settings
 
     monkeypatch.setitem(settings()["orchestrator"]["split"], "tau", None)
+
+
+@pytest.fixture(autouse=True)
+def no_judge_llm(monkeypatch):
+    """품질 평가 Judge 가 실제 LLM 을 부르지 않게 막는다 — 막히면 Judge 실패(partial)로 처리된다.
+
+    통합 테스트는 `run_config.quality_judge=False`(코드 기반 평가)로 돌리고, Judge 경로를 시험하는
+    테스트는 `evaluator.judge_llm` 을 대역 모델로 다시 덮어쓴다.
+    """
+    from src.orchestrator import evaluator
+
+    def blocked():
+        raise RuntimeError("테스트에서는 Judge LLM 을 부르지 않는다")
+    monkeypatch.setattr(evaluator, "judge_llm", blocked)

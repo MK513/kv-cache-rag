@@ -7,15 +7,21 @@ research → orchestrator 계획 → Worker(실제 에이전트) → 병합 → 
 
 대역 두 가지
 - `stakeholder` 에이전트: 네트워크와 실행별 저장소를 쓴다. `scripts/r3_smoke.py` 가 따로 검증한다.
-- `quality_eval`: 담당 C 가 구현하기 전까지 계약 형식(schema.QualityEval)의 통과 판정을 쓴다.
-  사람 검토 재개 경로는 A4 에서 선택 단계(--human-review)로 다시 붙이며 그때 테스트를 쓴다.
+- `quality_eval`: 배선·병합을 보는 테스트는 계약 형식(schema.QualityEval)의 통과 판정 대역을 쓴다.
+  아래 "실제 품질 평가" 테스트는 C 의 `quality_eval` 을 그대로 쓰고 Judge 만 끈다
+  (`run_config.quality_judge=False` — 코드 기반 평가, conftest 가 Judge LLM 도 막는다).
 """
 
 import json
+import re
 
 import pytest
 
 from src.agents import domain, market, maturity, research
+from src.agents import report as report_module
+from src.agents import synthesis as synthesis_module
+from src.agents.synthesis import SynthesisDraft
+from src.orchestrator import evaluator
 from src.graph import build_graph, invoke
 from tests import mock_nodes
 from src.output import pdf
@@ -122,12 +128,14 @@ def wired(monkeypatch, tmp_path):
                         lambda md, out: (out.parent.mkdir(parents=True, exist_ok=True),
                                          out.write_bytes(b"%PDF fixture")))
 
-    def run(state=None, **overrides):
+    def run(state=None, judge=None, **overrides):
         initial = state or {
             "run_id": "e2e-test", "run_status": "running", "trace": [],
             "run_config": {"domain": "데이터센터/클라우드", "technologies": ["TurboQuant", "ITME"],
                            "runs_dir": str(tmp_path), "started_at": "2026-09-22T00:00:00+00:00"},
         }
+        if judge is not None:
+            initial["run_config"] = initial["run_config"] | {"quality_judge": judge}
         overrides = {"quality_eval": mock_nodes.quality_eval("publish")} | overrides
         graph = build_graph(workers={"stakeholder": stakeholder_stub}, **overrides)
         return invoke(graph, initial), tmp_path / initial["run_id"]
@@ -193,3 +201,70 @@ def test_invalid_claims_never_reach_the_report(wired):
     assert "발표 단계, 배포 확인 미확인" not in final["report"]
     kinds = {(g["role"], g["kind"]) for g in final["gaps"] if g.get("kind")}
     assert ("market", "invalid_evidence") in kinds
+
+
+# ── 실제 품질 평가 (C) 와 맞물리는지 ───────────────────────────────────────────────
+
+class GroundedSynthesis:
+    """종합 LLM 대역 — 입력에 보인 Claim ID 를 근거로 단다(Groundedness L2 코드 검사 통과)."""
+
+    def with_structured_output(self, schema):
+        return self
+
+    def invoke(self, prompt):
+        ids = re.findall(r"- \((r\d+-[^)]+)\)", prompt)
+        return SynthesisDraft(
+            agreements=[{"text": "두 기술 모두 KV cache 메모리 병목을 다룬다", "claim_ids": ids[:2]}],
+            gaps=[], combination_hypothesis="공개 결합 실험이 없어 추론이다.")
+
+
+@pytest.fixture
+def evaluated(wired, monkeypatch):
+    monkeypatch.setattr(synthesis_module, "get_llm", lambda: GroundedSynthesis())
+
+    def run(**overrides):
+        return wired(judge=False, **{"quality_eval": evaluator.quality_eval} | overrides)
+    return run
+
+
+def decisions(directory):
+    return [json.loads(line) for line in (directory / "decisions.jsonl").read_text().splitlines()]
+
+
+def test_real_quality_eval_replans_only_the_unmet_cell(evaluated):
+    """품질 평가가 근거 문제를 찾으면 그 칸만 다시 계획하고, MAX_RETRY 에서 partial 로 발행한다.
+
+    stakeholder 대역은 ITME 칸에 조사 이력 없는 evidence_gap 만 낸다 → coverage 실패 → 재계획.
+    """
+    final, directory = evaluated()
+
+    tasks = [t["task_id"] for t in final["plan"]]
+    assert tasks == ["r2-stakeholder-ITME"]                       # 마지막 라운드는 미충족 칸 하나
+    worker_runs = [t["task_id"] for t in final["trace"] if t["node"] == "worker"]
+    assert len(worker_runs) == 4 + 1 + 1                          # 최초 4개 → 재계획 1 → 1
+    assert final["retry_count"] == 2
+    assert (final["run_status"], final["stop_reason"]) == ("partial", "MAX_RETRY(2) 도달 — 근거 문제 미해결")
+    assert json.loads((directory / "submission.json").read_text())["generated"] is True
+
+    routes = [(d["node"], d["decision"]) for d in decisions(directory)]
+    assert routes.count(("quality_eval", "orchestrator")) == 2
+    assert routes[-1] == ("quality_eval", "publish")
+
+
+def test_stale_publish_guard_regenerates_the_report_at_most_twice(evaluated):
+    """보고서가 계속 구버전으로 남는 결함이 있어도 보고서 재생성은 2회에서 멈추고 failed 로 끝난다."""
+    calls = []
+
+    def stale_report(state):
+        out = report_module.report(state)
+        calls.append(out["report_version"])
+        manifest = out["report_manifest"] | {"based_on_synthesis_version": 0}   # 종합과 어긋난 보고서
+        return out | {"report_manifest": manifest}
+
+    final, directory = evaluated(report=stale_report)
+
+    assert final["guard_retry_count"] == 2
+    assert len(calls) == 3 + 2                    # 라운드 0·1·2 보고서 + guard 재생성 2회
+    assert final["run_status"] == "failed" and final["report_paths"] == []
+    guarded = [d for d in decisions(directory) if d["reason"].startswith("publish guard")]
+    assert [d["decision"] for d in guarded] == ["report", "report", "publish"]

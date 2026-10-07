@@ -369,6 +369,7 @@ class ReportState(TypedDict, total=False):
 | `MAX_RETRY` | 2 | 재계획 라운드 |
 | `MAX_WORKERS` | 8 | 라운드당 Task·Worker (최초 4~7) → 실행 전체 최대 24 |
 | `max_repairs` | 2 | synthesis·report 수리 |
+| `max_guard_retries` | 2 | publish guard 구버전 → 보고서 재생성 (`guard_retry_count`). 소진하면 publish 가 failed 로 끝낸다 |
 | `max_searches` | 16 | **실행 전체** 웹 검색 (라운드마다 새로 주지 않음) |
 | `max_judge_retries` | 1 | |
 | LLM 호출 | `timeout=60`, SDK `max_retries=1` | 한 호출이 끝나지 않는 경우 대비 |

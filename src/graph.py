@@ -2,7 +2,9 @@
 
     setup → research → orchestrator ─(dispatch: Send × len(plan))→ worker ─→ collect_evidence
           → synthesis → report → quality_eval ─(route_after_eval)→ orchestrator | synthesis
-                                                                  | report | publish → END
+                                                                  | report | human_review | publish
+    human_review ⏸ → apply_review ─(route_after_review)→ synthesis | publish
+    publish → END
 
 - **Worker 목록이 코드에 없다.** orchestrator 가 research 결과로 조사 계획(`plan`)을 세우고,
   `dispatch` 가 Task 마다 `Send("worker", ...)` 로 Worker 를 띄운다. Worker 수 = 계획의 길이.
@@ -12,6 +14,9 @@
   기존 병합 로직(`_merge_one`)은 그대로 쓰고, 입력만 누적된 Worker 결과에서 고른다.
 - 품질 평가(`quality_eval`) 뒤 다음 노드는 `quality_eval["next"]` 가 정한다(담당 C).
 - 계획이 비면(재계획할 대상 없음) `dispatch` 가 바로 `publish` 로 보낸다.
+- Human Review 는 선택 단계다(`run_config.human_review`, `app.py --human-review`). 품질 평가를
+  통과하면 `human_review` 가 worksheet 를 만들고 그 뒤에서 멈춘다(`interrupt_after`). 사람이
+  판정을 채우면 `resume` 이 저장된 State 로 이어 `apply_review` 부터 돈다.
 
 병합 오류는 분기가 아니라 `collect_evidence` 의 예외다. 같은 ID 에 다른 내용이 들어오면
 어느 원문을 가리키는지 고를 근거가 없다(설계서 §7). 관점 결과가 비는 것은 오류가 아니라
@@ -19,7 +24,6 @@
 """
 
 import hashlib
-import json
 from pathlib import Path
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -32,7 +36,8 @@ from src.agents.research import research
 from src.agents.synthesis import synthesis
 from src.agents.worker import make_worker
 from src.orchestrator.dispatch import dispatch
-from src.orchestrator.evaluator import quality_eval, route_after_eval
+from src.observability import log_decision
+from src.orchestrator.evaluator import apply_review, quality_eval, route_after_eval, route_after_review
 from src.orchestrator.planner import orchestrator
 from src.orchestrator.selection import select_active_worker_results
 from src.output import validate
@@ -178,6 +183,22 @@ def collect_evidence(state) -> dict:
                         gaps=len(gaps), failed_workers=len(failed))]}
 
 
+def human_review(state) -> dict:
+    """선택 단계. 보고서에 표시된 Claim 으로 worksheet(`runs/<run_id>/review.csv`)를 만든다.
+
+    그래프는 이 노드 **뒤에서** 멈춘다. 멈추기 전에 worksheet 가 있어야 사람이 판정을 적을 수 있다.
+    앞서 채운 판정과 원장(reviews/verdicts.json)의 같은 주장·근거 판정은 이어 받는다(담당 C).
+    """
+    from src.output import review
+
+    path, carried = review.prepare_worksheet(state)
+    decision = log_decision(state, "human_review", "apply_review",
+                            "품질 평가 통과 — 사람 검토 대기", worksheet=str(path),
+                            carried=carried, report_version=state.get("report_version"))
+    return {"last_decision": decision,
+            "trace": [event("human_review", "paused", worksheet=str(path), carried=len(carried))]}
+
+
 DEFAULT_NODES = {
     "setup": setup,                      # A
     "research": research,                # B — 계획의 입력이 되는 선행 조사
@@ -186,6 +207,8 @@ DEFAULT_NODES = {
     "synthesis": synthesis,              # C
     "report": report,                    # C
     "quality_eval": quality_eval,        # C — 품질 평가, 다음 노드 결정
+    "human_review": human_review,        # A — 선택 단계, 이 노드 뒤에서 멈춘다
+    "apply_review": apply_review,        # C — 사람 판정 반영
     "publish": publish,                  # C
 }
 
@@ -206,28 +229,37 @@ def build_graph(workers: dict | None = None, **overrides):
     b.add_edge("synthesis", "report")
     b.add_edge("report", "quality_eval")
     b.add_conditional_edges("quality_eval", route_after_eval,
-                            ["orchestrator", "synthesis", "report", "publish"])
+                            ["orchestrator", "synthesis", "report", "human_review", "publish"])
+    b.add_edge("human_review", "apply_review")
+    b.add_conditional_edges("apply_review", route_after_review, ["synthesis", "publish"])
     b.add_edge("publish", END)
-    return b.compile(checkpointer=InMemorySaver())
+    return b.compile(checkpointer=InMemorySaver(), interrupt_after=["human_review"])
+
+
+def _config(run_id: str) -> dict:
+    """실행 하나가 스레드 하나다. run_id 가 thread_id·LangSmith metadata 를 잇는 상관 키다."""
+    return {"configurable": {"thread_id": run_id},
+            "recursion_limit": settings()["orchestrator"]["recursion_limit"],
+            "run_name": "kv-cache-orchestrator-workers",
+            "tags": ["orchestrator-workers"],
+            "metadata": {"run_id": run_id}}
 
 
 def invoke(graph, state):
-    """실행 하나가 스레드 하나다. run_id 가 thread_id·LangSmith metadata 를 잇는 상관 키다."""
-    run_id = state.get("run_id") or "unknown"
-    return graph.invoke(state, config={
-        "configurable": {"thread_id": run_id},
-        "recursion_limit": settings()["orchestrator"]["recursion_limit"],
-        "run_name": "kv-cache-orchestrator-workers",
-        "tags": ["orchestrator-workers"],
-        "metadata": {"run_id": run_id},
-    })
+    return graph.invoke(state, config=_config(state.get("run_id") or "unknown"))
 
 
-def resume_state(run_id, runs_dir="runs") -> dict:
-    """save_draft 가 남긴 초안을 초기 State 로 되돌린다.
+def awaiting_review(graph, run_id: str) -> bool:
+    """`human_review` 뒤에서 멈췄는가 — 다음 실행할 노드가 apply_review 다."""
+    return "apply_review" in graph.get_state(_config(run_id)).next
 
-    사람은 이 draft.json 의 `validation` · `review_status` 를 직접 고쳐 검토 결과를 넣는다.
-    그게 재개의 입력이다. `review_status` 가 pending 이면 다시 초안 저장에서 멈춘다.
+
+def resume(graph, state):
+    """human_review 에서 멈춘 실행을 저장된 State 로 이어 돌린다(`app.py --resume`).
+
+    체크포인트(InMemorySaver)는 프로세스와 함께 사라진다. 멈출 때 남긴 State 를 새 스레드에
+    human_review 가 쓴 것으로 올리면 다음 노드가 apply_review 가 된다 — 검토 전 단계는 다시 돌지 않는다.
     """
-    draft = json.loads((Path(runs_dir) / run_id / "draft.json").read_text(encoding="utf-8"))
-    return draft | {"trace": []}
+    config = _config(state.get("run_id") or "unknown")
+    graph.update_state(config, state, as_node="human_review")
+    return graph.invoke(None, config)

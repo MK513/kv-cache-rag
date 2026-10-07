@@ -54,6 +54,7 @@ orchestrator:
   max_workers: 8              # MAX_WORKERS — 한 라운드의 Task·Worker 수
   max_repairs: 2              # synthesis·report 저비용 수리 (State.repair_count)
   max_steps: 12               # State.step_count — 정상 종료 가드
+  max_guard_retries: 2        # publish guard 구버전 → 보고서 재생성 (State.guard_retry_count)
   recursion_limit: 60         # 그래프 안전장치. langgraph 1.2.12 기본값은 10007 이라 명시한다
   max_searches: 16            # 실행 전체 웹 검색 상한 (라운드마다 새로 주지 않는다)
   max_judge_retries: 1
