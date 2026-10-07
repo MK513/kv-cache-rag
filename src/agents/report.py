@@ -21,6 +21,7 @@ Orchestrator-Workers (계획서 §7-1·§7-2):
 
 import math
 import re
+from collections import Counter
 
 from src.agents.common import CITATION_RE, event
 from src.llm import judge_model_name, llm_report, model_name
@@ -47,8 +48,6 @@ CRITERION_LABEL = {"groundedness_l1": "근거 연결(L1)", "groundedness_l2": "�
                    "structure": "구조·분량"}
 # item 이 이미 대상 기술을 말하고 있으면 접두어를 붙이지 않는다. LLM 이 쓴 문장이라
 # "양 기술" · "두 기술" · 기술명 나열 등 표현이 갈린다.
-TECH_ALIAS = {"both": ("두 기술", "양 기술", "TurboQuant", "ITME"),
-              "TurboQuant": ("TurboQuant",), "ITME": ("ITME",)}
 
 
 def _number_citations(markdown: str, marks: dict) -> str:
@@ -381,55 +380,53 @@ def _reused() -> str:
             f"그대로 사용했다(이번 실행에서 새로 생성 {report.get('cache_misses', 0)}건).")
 
 
-def _gap_line(gap: dict) -> str:
-    item, technology = gap.get("item", ""), gap.get("technology", "")
-    named = any(alias in item for alias in TECH_ALIAS.get(technology, (technology,)) if alias)
-    head = item if named else f"{TECH_LABEL.get(technology, technology)} {item}".strip()
-    line = f"{head}: {gap.get('reason', '')}".strip(": ").strip()
-    kind = gap.get("kind", "evidence_gap")
-    if kind != "evidence_gap":
-        line += f" *({GAP_KIND_LABEL.get(kind, kind)} — 조사가 끝나지 않은 칸)*"
-    elif gap.get("attempted_queries"):
-        line += f" (조사 질의 {len(gap['attempted_queries'])}건 실행)"
+def _gap_cell_line(role: str, technology: str, gaps: list[dict]) -> str:
+    """관점×기술 칸 하나의 근거 공백을 한 줄로. 항목만 잇고 사유 문구는 뺀다(대부분 같은 문구다)."""
+    items = "; ".join(dict.fromkeys(g.get("item", "") for g in gaps if g.get("item")))
+    line = f"**{ROLE_LABEL.get(role, role)} · {TECH_LABEL.get(technology, technology)}** — {items}"
+    unfinished = Counter(g.get("kind") for g in gaps if g.get("kind", "evidence_gap") != "evidence_gap")
+    if unfinished:
+        kinds = ", ".join(f"{GAP_KIND_LABEL.get(k, k)} {n}건" for k, n in sorted(unfinished.items()))
+        line += f" *(조사가 끝나지 않은 칸 — {kinds})*"
+    queries = {q for g in gaps for q in g.get("attempted_queries") or []}
+    if queries:
+        line += f" (조사 질의 {len(queries)}건 실행)"
     return line
 
 
 def _gaps_section(state: dict, gaps: list[dict], hidden: int) -> str:
-    """§6 한계의 근거 공백. 평평하게 나열하면 수십 줄이 되므로 관점별로 묶는다.
+    """§6 한계의 근거 공백. 관점×기술 칸마다 한 줄로 묶는다.
 
-    §9 목차표 — 6 한계는 자료 공백을 담는다. 분량 상한으로 접은 건수는 숨기지 않고 밝힌다.
+    항목마다 한 줄씩 펴면 54줄이 돼 §6 이 보고서를 덮었다(20261007 실행). §9 목차표 — 6 한계는 자료
+    공백을 담는다. 분량 상한으로 접은 건수와 품질 평가로 뺀 Claim 수는 숨기지 않고 밝힌다.
     """
-    grouped: dict[str, list[str]] = {}
+    cells: dict[tuple[str, str], list[dict]] = {}
     for gap in gaps:
-        grouped.setdefault(gap.get("role", ""), []).append(_gap_line(gap))
+        cells.setdefault((gap.get("role", ""), gap.get("technology", "both")), []).append(gap)
+    lines = [_gap_cell_line(role, tech, cells[role, tech])
+             for role in ROLE_LABEL for tech in (*TECHS, "both") if (role, tech) in cells]
 
     validation = state.get("validation") or {}
     verdicts = validation.get("claim_verdicts") or {}
-    for claim_id in validation.get("rejected_claims") or []:
+    rejected = validation.get("rejected_claims") or []
+    for claim_id in rejected:
         verdict = verdicts.get(claim_id) or {}
-        grouped.setdefault("review", []).append(
-            f"검토 부결: {claim_id} (검토자: {verdict.get('reviewer') or '검토자 미상'} — "
-            f"{verdict.get('comment') or '사유 미기재'})")
-    for claim_id, flag in sorted((state.get("claim_flags") or {}).items()):
-        if (flag or {}).get("status") != "invalid" or claim_id in (validation.get("rejected_claims") or []):
-            continue
-        by = "사람 검토 부결" if flag.get("by") == "human_review" else "근거 무효(품질 평가)"
-        grouped.setdefault("review", []).append(
-            f"{by}: {claim_id} — {flag.get('reason') or '사유 미기재'}")
-
-    if not grouped:
-        return "- 해당 없음"
-
-    blocks = []
-    for role in list(ROLE_LABEL) + ["review"]:
-        items = grouped.get(role)
-        if not items:
-            continue
-        label = "내용 검토" if role == "review" else ROLE_LABEL[role]
-        blocks.append(f"*{label}* ({len(items)}건)\n" + _bullets(items))
+        lines.append(f"검토 부결: {claim_id} (검토자: {verdict.get('reviewer') or '검토자 미상'} — "
+                     f"{verdict.get('comment') or '사유 미기재'})")
+    current = {c.get("claim_id") for role in ASSESSMENT_ROLES for c in (state.get(role) or {}).get("claims") or []}
+    flags = {cid: f or {} for cid, f in (state.get("claim_flags") or {}).items()
+             if cid in current and cid not in rejected}
+    for by, label in (("human_review", "사람 검토에서 부결"), ("quality_eval", "품질 평가에서 근거 무효로 판정")):
+        n = sum(f.get("status") == "invalid" and (f.get("by") == by) for f in flags.values())
+        if n:
+            lines.append(f"{label}해 본문에서 뺀 Claim {n}건 (사유는 실행 기록 `quality-v*.json`·`decisions.jsonl`)")
+    partial = sum(f.get("status") == "partial" for f in flags.values())
+    if partial:
+        lines.append(f"일부 세부 서술이 인용 구절로 확인되지 않은 Claim {partial}건 — 핵심 주장은 근거와 맞아 "
+                     "본문에 싣되, 해당 세부 수치는 원문 대조가 필요하다")
     if hidden:
-        blocks.append(f"- 외 근거 공백 {hidden}건은 분량 상한으로 생략했다(실행 기록 State `gaps` 에 전부 남아 있다).")
-    return "\n\n".join(blocks)
+        lines.append(f"외 근거 공백 {hidden}건은 분량 상한으로 생략했다(실행 기록 State `gaps` 에 전부 남아 있다).")
+    return _bullets(lines)
 
 
 def _exceptions_section(exceptions: list[dict]) -> str:

@@ -78,3 +78,45 @@ def test_flagged_selectivity_shows_every_hidden_limit_claim():
     state["quality_eval"] = {"verdicts": {"bias": {"reasons": ["③ TurboQuant 선택적 근거 사용 — x"]}}}
     shown = report._select(state, set(), set(), 1, lambda c: set())
     assert [c["claim_id"] for c in shown["market"]] == ["a", "b"]
+
+
+# ── 20261007-170016 실행: Judge 가 Claim 대부분을 무효로 만들어 본문이 비고 §6 이 54줄이 된 원인 ──
+
+def test_judge_sees_the_whole_evidence_quote(state, monkeypatch):  # noqa: F811
+    long_quote = "가" * 1500 + "끝표지"
+    for item in state["evidence_registry"].values():
+        item["quote"] = long_quote
+    prompts = []
+
+    def answer(schema, prompt):
+        prompts.append(prompt)
+        return agreeable(schema, prompt)
+    monkeypatch.setattr(evaluator, "judge_llm", lambda: FakeJudge(answer))
+    state["run_config"]["quality_judge"] = True
+    evaluate(state)
+    assert any("끝표지" in p for p in prompts)
+
+
+def test_partial_judgment_keeps_the_claim_and_notes_it(state, monkeypatch):  # noqa: F811
+    from tests.test_quality_eval import MARKET_TQ, asked
+
+    def answer(schema, prompt):
+        if schema is evaluator.L1Judgment:
+            claims, _, _ = asked(prompt)
+            return schema(verdicts=[{"claim_id": c, "verdict": "partial" if c == MARKET_TQ else "supported"}
+                                    for c in claims])
+        return agreeable(schema, prompt)
+    monkeypatch.setattr(evaluator, "judge_llm", lambda: FakeJudge(answer))
+    state["run_config"]["quality_judge"] = True
+    out = evaluate(state)
+    assert out["claim_flags"][MARKET_TQ]["status"] == "partial"
+    assert out["quality_eval"]["passed"]
+    rebuilt = report.report(out)
+    assert MARKET_TQ in rebuilt["report_manifest"]["sections"]["market"]
+    assert "일부 세부 서술이 인용 구절로 확인되지 않은 Claim 1건" in rebuilt["report"]
+
+
+def test_task_queries_are_added_to_the_defaults():
+    task = {"technologies": ["ITME"], "queries": ["ITME testbed"], "focus": "f"}
+    _, queries, _ = common.task_for({"task": task}, ["기본 질의"])
+    assert queries == ["기본 질의", "ITME testbed"]

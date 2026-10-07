@@ -105,7 +105,10 @@ def task_for(state, default_queries: list) -> tuple[list[str], list, str]:
             f"(다른 기술은 쓰지 않는다)\n조사 초점: {task['focus']}")
     if task.get("rationale"):
         note += f"\n배경: {task['rationale']}"
-    return list(task["technologies"]), list(task["queries"]), note
+    # Task 질의는 기본 질의에 더한다. 대체하면 계획 단계의 짧은 질의("TurboQuant 데이터센터 적용")만으로
+    # 검색해 핵심 청크(LongBench 등)를 놓치고 본문이 "미확인" 나열이 됐다(20261007 실행 domain).
+    queries = list(dict.fromkeys([*default_queries, *task["queries"]]))
+    return list(task["technologies"]), queries, note
 
 
 def retrieve(search, pairs, top_k: int, found: dict, attempted: list) -> None:

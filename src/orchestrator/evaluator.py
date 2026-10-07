@@ -26,6 +26,7 @@
 """
 
 import re
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -68,7 +69,9 @@ class JudgeFailure(Exception):
 
 class ClaimJudgment(BaseModel):
     claim_id: str
-    supported: bool = Field(description="인용 구절이 주장을 직접 뒷받침하면 true")
+    verdict: Literal["supported", "partial", "unsupported"] = Field(
+        description="supported: 핵심 주장(결론·수치)이 구절과 맞다. partial: 핵심은 맞으나 일부 세부가 구절에서 "
+                    "확인되지 않는다. unsupported: 핵심 주장이 구절과 어긋나거나 구절에 없다")
     reason: str = ""
 
 
@@ -428,7 +431,7 @@ def _evidence_block(ctx: Context, claim: dict) -> str:
         item = ctx.evidence.get(evidence_id) or {}
         source = ctx.sources.get(item.get("source_id")) or {}
         lines.append(f"  - 근거 {evidence_id} ({source.get('title') or item.get('source_id', '')}, "
-                     f"{item.get('location', '')}): {(item.get('quote') or '')[:600]}")
+                     f"{item.get('location', '')}): {item.get('quote') or ''}")
     return "\n".join(lines)
 
 
@@ -446,15 +449,24 @@ def _judge_l1(ctx: Context, findings: Findings) -> dict:
             body = "\n".join(f"- Claim {cid} [{ctx.claim(cid).get('kind')}]: {ctx.claim(cid).get('text')}\n"
                              f"{_evidence_block(ctx, ctx.claim(cid))}" for cid in subset)
             return ("각 Claim 이 함께 적힌 인용 구절로 뒷받침되는지 판정한다. 수치·단위·비교 기준선·"
-                    "실험 조건이 구절과 다르면 뒷받침되지 않는다. 추론·가설 Claim 은 전제가 구절에 "
-                    f"있는지만 본다. verdicts 에 Claim 마다 한 건씩, claim_id 를 그대로 적는다.\n\n{body}")
+                    "실험 조건이 구절과 다르면 그 부분은 뒷받침되지 않는다. 추론·가설 Claim 은 전제가 구절에 "
+                    "있는지만 본다. '미확인'·'근거 없음'처럼 근거가 없다고 밝힌 문장은 판정하지 않는다 — "
+                    "주장이 아니라 근거 공백 서술이다. Claim 은 여러 문장으로 된 절이므로 세부 하나가 "
+                    "확인되지 않는다고 unsupported 로 두지 말고 partial 로 둔다. "
+                    f"verdicts 에 Claim 마다 한 건씩, claim_id 를 그대로 적는다.\n\n{body}")
         judged = _judge_all(L1Judgment, prompt, ids, lambda v: v.claim_id.strip(), lambda r: r.verdicts)
         judged_count += len(judged)
         for cid in ids:
             verdict = judged[cid]
-            if not verdict.supported:
+            if verdict.verdict == "unsupported":
                 _invalidate(findings, ctx.state, role, ctx.claim(cid),
                             f"Judge: 근거가 주장을 뒷받침하지 않음 — {verdict.reason}")
+            elif verdict.verdict == "partial":
+                # 절 단위 Claim 은 세부 하나만 어긋나도 전체가 무효가 돼 본문이 비었다(20261007 실행).
+                # 핵심이 맞으면 싣고, 확인되지 않은 세부는 §6 에 한 줄로 밝힌다.
+                findings.flags[cid] = {"status": "partial", "by": "quality_eval",
+                                       "reason": f"Judge: 일부 세부 원문 미확인 — {verdict.reason}",
+                                       "at_report_version": ctx.state.get("report_version")}
     total = len(dict.fromkeys(cid for ids in strata.values() for cid in ids))
     # 보낸 수가 아니라 실제로 판정을 받은 수를 기록한다(보고서 §6 의 n/N 근거).
     return {"l1": f"{judged_count}/{total}",

@@ -49,7 +49,9 @@ def test_task_drives_queries_technology_and_prompt(calls, module, key):
     a = Assessment.model_validate(out[key])
     meta = WorkerMeta.model_validate(out["worker_meta"])
     papers = [p for p in calls["search"] if p["query"] != "데이터센터 추론 동시성 메모리 비용 구조 TCO"]
-    assert {p["query"] for p in papers} == {"ITME prototype testbed"}
+    # Task 질의는 기본 질의에 더해진다(대체하지 않는다)
+    defaults = getattr(module, "BASE_QUERIES", None) or module.QUERIES
+    assert {p["query"] for p in papers} == {*defaults, "ITME prototype testbed"}
     assert all(p["technology"] == "ITME" for p in papers)
     assert "ITME 프로토타입 검증 범위" in calls["prompt"][0]
     assert "ITME prototype testbed" in meta.attempted_queries
@@ -213,7 +215,7 @@ def test_domain_background_search_not_in_worker_meta(monkeypatch):
     monkeypatch.setattr(domain, "bind_document_search", lambda *a: Search([ctx] if len(a) > 1 else []))
     monkeypatch.setattr(domain, "run_node", lambda *a: "근거 공백: 없음")
     meta = domain.domain_assessment({"run_id": "w-test", "run_config": {}, "task": TASK})["worker_meta"]
-    assert meta["attempted_queries"] == ["ITME prototype testbed"] and meta["retrieved"] == 0
+    assert meta["attempted_queries"] == [*domain.QUERIES, "ITME prototype testbed"] and meta["retrieved"] == 0
 
 
 def test_stakeholder_appends_task_queries_to_group_queries(tmp_path):

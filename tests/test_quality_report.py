@@ -80,7 +80,7 @@ def test_invalid_claim_is_gone_from_body_synthesis_and_reference(state):
     assert MATURITY_TQ not in out["report_manifest"]["sections"]["maturity"]
     assert MATURITY_TQ not in out["report_manifest"]["sections"]["summary"]
     assert "src-maturity-turboquant" not in out["report_manifest"]["references"]
-    assert "근거 무효(품질 평가): " + MATURITY_TQ in out["report"]
+    assert "품질 평가에서 근거 무효로 판정해 본문에서 뺀 Claim 1건" in out["report"]
 
 
 def test_gap_kinds_are_labeled(state):
@@ -88,7 +88,7 @@ def test_gap_kinds_are_labeled(state):
                           "reason": "TimeoutError", "kind": "execution_gap"})
     md = report.report(state)["report"]
 
-    assert "ITME 투자자 발언: TimeoutError *(조사 실행 실패 — 조사가 끝나지 않은 칸)*" in md
+    assert "투자자 발언" in md and "*(조사가 끝나지 않은 칸 — 조사 실행 실패 1건)*" in md
 
 
 def test_limits_section_states_the_quality_scope(state):

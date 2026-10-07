@@ -130,7 +130,7 @@ def research(state: Dict[str, Any]) -> Dict[str, Any]:
             run_id=run_id,
             collection=collection_name,
             allowed_uses=["research"],
-            quote=c.get("text", "")[:300],
+            quote=c.get("text", ""),
             location=f"p.{c.get('page', 1)}",
         )
 
