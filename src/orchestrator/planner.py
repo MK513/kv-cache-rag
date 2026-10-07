@@ -87,13 +87,21 @@ def probe_query(perspective: str, tech: str, domain: str) -> str:
     return f"{tech} {CRITERIA[perspective]} {domain}".strip()
 
 
+def _default_search(*args, **kwargs):
+    from src.rag.retrieve import search                      # 임베딩을 끌고 오므로 호출 시점에
+    return search(*args, **kwargs)
+
+
+# 사전 조사 검색 함수. 테스트는 이것을 바꿔 색인·임베딩 모델을 건드리지 않는다.
+PROBE_SEARCH = _default_search
+
+
 def probe(state, search=None) -> dict | None:
     """(관점, 기술) → {chunks, groups, queries}. τ 가 보정되지 않았으면 None."""
     tau = (_cfg().get("split") or {}).get("tau")
     if tau is None:
         return None
-    if search is None:
-        from src.rag.retrieve import search                  # 임베딩을 끌고 오므로 호출 시점에
+    search = search or PROBE_SEARCH
     from src.rag.retrieve import ROLE_COLLECTIONS
     groups_of = (settings().get("quality") or {}).get("source_groups") or {}
     domain = (state.get("run_config") or {}).get("domain", "")

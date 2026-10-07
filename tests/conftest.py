@@ -25,3 +25,17 @@ def no_llm_planning(monkeypatch):
     def blocked():
         raise RuntimeError("테스트에서는 계획 LLM 을 부르지 않는다")
     monkeypatch.setattr(planner, "get_llm", blocked)
+
+
+@pytest.fixture(autouse=True)
+def no_probe_search(monkeypatch):
+    """사전 조사가 실제 색인·임베딩 모델을 부르지 않게 막는다 — 사전 조사 없이 기본 개수로 계획한다.
+
+    설정의 τ 가 보정돼 있어도 CI 에는 원문·모델이 없다. 사전 조사를 시험하는 테스트는
+    `planner.probe` 를 덮어쓰거나 `probe(state, search=...)` 로 검색을 넘긴다.
+    """
+    from src.orchestrator import planner
+
+    def blocked(*args, **kwargs):
+        raise RuntimeError("테스트에서는 사전 조사 검색을 부르지 않는다")
+    monkeypatch.setattr(planner, "PROBE_SEARCH", blocked)
