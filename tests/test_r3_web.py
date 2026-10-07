@@ -165,3 +165,17 @@ def test_non_200_untrusted_long_error_page_is_rejected(tmp_path):
 def test_invalid_subdir_is_rejected(tmp_path, subdir):
     with pytest.raises(ValueError):
         store(tmp_path, subdir=subdir)
+
+def test_two_stakeholder_tasks_fetching_same_url_merge_without_conflict(tmp_path):
+    # Task 별 저장소는 스냅샷 경로·수집 시각이 달라도 같은 원문이면 병합이 성공해야 한다.
+    from src.graph import _merge_one
+    a = store(tmp_path, subdir='r0-stakeholder-TurboQuant', transport=transport).fetch('https://example.org/article')
+    b = store(tmp_path, subdir='r0-stakeholder-ITME', transport=transport).fetch('https://example.org/article')
+    assert a['source']['snapshot_path'] != b['source']['snapshot_path']
+    sources, evidence = {}, {}
+    for node, r in (('w1', a), ('w2', b)):
+        assert _merge_one(sources, r['source'], 'source_id', node) == []
+        for e in r['evidence']:
+            assert _merge_one(evidence, e, 'evidence_id', node) == []
+    assert sources[a['source']['source_id']]['snapshot_path'] == a['source']['snapshot_path']
+    assert len(evidence) == len(a['evidence'])
