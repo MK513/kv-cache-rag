@@ -1,4 +1,4 @@
-"""Human semantic review worksheet — 담당: R5
+"""Human semantic review worksheet — 담당 C (agent/ow-quality)
 
 자동 검증만으로 Claim을 승인하지 않는다.
 
@@ -15,6 +15,10 @@
 - 직접 채택 vs 인접 생태계 구분
 
 review_result와 reviewer는 사람이 직접 입력한다.
+
+Orchestrator-Workers 흐름(계획서 §9)에서는 선택 단계다(`--human-review`). 품질 평가를 통과한
+보고서에 **표시된** Claim 만 worksheet 에 싣고(`prepare_worksheet`), 재개 후 `apply_review` 가
+`load_review_verdicts` 로 판정을 읽어 부결 Claim 을 `claim_flags` 에 기록한다.
 """
 
 import csv
@@ -24,16 +28,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.output import validate
+from src.schema import ASSESSMENT_ROLES
 from src.state import run_dir
 
-
-REVIEW_NODES = [
-    "research",
-    "maturity",
-    "market",
-    "stakeholder",
-    "domain_assessment",
-]
+# 역할 목록은 schema 한 곳에서 가져온다(코드 검토 D2).
+REVIEW_NODES = ASSESSMENT_ROLES
 
 
 def _evidence_map(assessment: dict) -> dict:
@@ -393,3 +392,61 @@ def review(state) -> dict:
             "errors": len(validation.get("errors") or []),
         }],
     }
+
+
+# ── Orchestrator-Workers: 선택 단계 Human Review (계획서 §9) ────────────────────
+
+FIELDNAMES = ["claim_id", "node", "technology", "claim_kind", "claim_text", "evidence_id",
+              "source_id", "source_type", "location", "evidence_quote", "review_result",
+              "reviewer", "review_comment", "carried_from"]
+
+
+def _displayed_state(state: dict) -> dict:
+    """보고서에 표시된 Claim 만 남긴 State. 사람이 볼 것은 실제로 실린 주장이다."""
+    sections = (state.get("report_manifest") or {}).get("sections")
+    if sections is None:
+        return state
+    shown = {role: set(sections.get(role) or []) for role in REVIEW_NODES}
+    return state | {role: dict(state.get(role) or {}) | {
+        "claims": [c for c in (state.get(role) or {}).get("claims") or []
+                   if c.get("claim_id") in shown[role]]} for role in REVIEW_NODES}
+
+
+def prepare_worksheet(state: dict) -> tuple[Path, list[str]]:
+    """human_review 에서 멈추기 전에 worksheet 를 만든다. 이미 있으면 새 Claim 행만 덧붙인다.
+
+    재종합 뒤 다시 검토할 때 앞서 채운 판정을 지우지 않는다(claim_id 기준 병합).
+    원장에 같은 주장·근거가 있으면 판정을 미리 채운다.
+    """
+    config = state.get("run_config") or {}
+    ledger = {} if config.get("no_carry_review") else load_ledger(config.get("review_ledger") or LEDGER)
+    path = run_dir(state) / "review.csv"
+    rows = build_review_rows(_displayed_state(state))
+    carried = carry_verdicts(rows, ledger) if ledger else []
+    if path.exists():
+        existing = list(csv.DictReader(path.open(encoding="utf-8-sig")))
+        known = {row.get("claim_id") for row in existing}
+        rows = existing + [row for row in rows if row["claim_id"] not in known]
+        carried = [cid for cid in carried if cid not in known]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8-sig", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=FIELDNAMES, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+    return path, carried
+
+
+def load_review_verdicts(state: dict, path: str | Path | None = None) -> tuple[dict, list[str]]:
+    """apply_review 가 읽을 판정. 이번에 채운 판정은 원장에 올려 다음 실행이 다시 묻지 않게 한다."""
+    config = state.get("run_config") or {}
+    path = Path(path or run_dir(state) / "review.csv")
+    verdicts = read_verdicts(path)
+    if not path.exists() or config.get("no_carry_review"):
+        return verdicts, []
+    ledger_path = Path(config.get("review_ledger") or LEDGER)
+    ledger = load_ledger(ledger_path)
+    rows = list(csv.DictReader(path.open(encoding="utf-8-sig")))
+    added = promote(rows, ledger, state.get("run_id", ""))
+    if added:
+        save_ledger(ledger, ledger_path)
+    return verdicts, added
