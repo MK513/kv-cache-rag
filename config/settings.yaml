@@ -9,12 +9,13 @@
 
 # ── llm: 담당 A ──────────────────────────────────────────────────────────────
 llm:
-  model: gpt-4.1-mini         # 계획·생성·종합·Judge 공통. temperature·seed 를 실제로 전달하는 비추론형 모델
+  model: gpt-5.6-luna         # 계획·생성·종합·Judge 공통. 추론형이라 langchain 이 temperature 를 보내지 않는다 —
+                              # 재현성은 LLM 캐시가 맡는다(src/llm.py). gpt-4.1-mini 는 인용 형식을 자주 어겼다(20261007 실행)
   judge_model: null           # null 이면 model 을 쓴다. Judge 만 다른 모델로 바꿀 때 지정
   temperature: 0
   seed: 20260922              # 재현용 고정값. 바꾸면 같은 근거에서도 문장이 달라진다.
                               # temperature=0 만으로는 같은 출력이 보장되지 않는다.
-  timeout: 180                # 호출 하나의 상한(초). stakeholder 초안(근거 40k 자)은 60초를 넘겼다(20261007 실행)
+  timeout: 300                # 호출 하나의 상한(초). stakeholder 초안(근거 40k 자)은 mini 로도 60초를 넘겼다. 추론형은 더 걸린다
   max_retries: 1              # SDK 내부 재시도. 그래프 재시도(재계획 라운드)와 별개
 
 retrieval:

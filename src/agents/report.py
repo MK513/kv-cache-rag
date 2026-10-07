@@ -461,7 +461,7 @@ def _quality_scope(state: dict, displayed: list[str]) -> str:
         how = "전수" if sampled >= total else "관점×기술 층화 결정적 표본"
         lines.append(
             f"- 자동 품질 평가: 표시된 Claim {total}건 전부의 주장→근거→출처 연결을 코드로 검사했고, "
-            f"근거가 주장을 뒷받침하는지는 LLM Judge({judge_model_name()}, temperature 0)가 "
+            f"근거가 주장을 뒷받침하는지는 LLM Judge({judge_model_name()}, 고정 프롬프트)가 "
             f"{sampled}/{total}건({how}) 판정했다. 종합 문장의 참조 범위·중립성·관점 커버리지·"
             f"선택적 근거 사용도 Judge 가 함께 판정했다.")
         lines.append("- Judge 는 생성과 같은 계열 모델이라 자기평가 편향이 남을 수 있다"
