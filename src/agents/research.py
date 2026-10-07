@@ -13,16 +13,12 @@
     - Gap 객체의 technology(TurboQuant/ITME/both) 분기 처리
 """
 
-import json
 import re
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Tuple
 
-from src.agents.common import run_node
-from src.schema import Assessment, Claim, Evidence, Gap, Source
+from src.agents.common import CITATION_RE, claim_body, event, gaps_from_text, invalid_gaps, retrieve, run_node, section_claims
+from src.schema import TECHS, Assessment, Claim, Evidence, Gap, Source
 from src.tools.docs import bind_document_search, format_chunks
-
-TECHS = ["TurboQuant", "ITME"]
 
 INSTRUCTION = """당신은 데이터센터 및 클라우드 인프라 관점의 기술 조사 수석 연구원(R4)입니다.
 선정 기술 2건(TurboQuant, ITME)의 논문 원문에서 다음 핵심 항목을 추출하여 객관적으로 기술하십시오.
@@ -56,43 +52,6 @@ QUERIES = [
     "성능 한계, 오버헤드, 양자화 손실 및 미해결 제약사항",
 ]
 WIDEN = " 벤치마크 처리량 지연시간 정확도 오버헤드 theoretical bound"
-
-HEX_CITATION_RE = re.compile(r"\[([0-9a-f]{12})\]")
-
-
-def _extract_gaps_from_text(text: str) -> List[Gap]:
-    """본문 마지막 줄의 '근거 공백: ...' 패턴을 파싱하여 Gap 객체 목록으로 변환."""
-    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
-    if not lines:
-        return []
-    last_line = lines[-1]
-    if not last_line.startswith("근거 공백:"):
-        return []
-
-    payload = last_line.replace("근거 공백:", "").strip()
-    if payload in ("", "없음", "None"):
-        return []
-
-    raw_items = [g.strip() for g in payload.split("|") if g.strip()]
-    gap_objects: List[Gap] = []
-    for item in raw_items:
-        tech_matched = "both"
-        lower_item = item.lower()
-        if "turboquant" in lower_item and "itme" not in lower_item:
-            tech_matched = "TurboQuant"
-        elif "itme" in lower_item and "turboquant" not in lower_item:
-            tech_matched = "ITME"
-
-        gap_objects.append(
-            Gap(
-                role="research",
-                technology=tech_matched,
-                item=item,
-                reason="제공된 근거에서 확인하지 못함",
-            )
-        )
-    return gap_objects
-
 
 def _split_technology_sections(text: str) -> Tuple[str, str]:
     """본문에서 TurboQuant 서술부와 ITME 서술부를 분리."""
@@ -130,18 +89,10 @@ def research(state: Dict[str, Any]) -> Dict[str, Any]:
     # 1. R3 계약에 따른 research 전용 문서 검색기 바인딩 (papers_core, direct 자동 강제)
     doc_search = bind_document_search("research")
 
-    accumulated_chunks: List[Dict[str, Any]] = []
     chunk_index_map: Dict[str, Dict[str, Any]] = {}
 
     def _execute_search(query_list: List[str]):
-        for tech in TECHS:
-            for q in query_list:
-                hits = doc_search.invoke({"query": q, "technology": tech, "top_k": 5})
-                for c in hits:
-                    cid = c.get("chunk_id")
-                    if cid and cid not in chunk_index_map:
-                        chunk_index_map[cid] = c
-                        accumulated_chunks.append(c)
+        retrieve(doc_search, [(q, tech) for tech in TECHS for q in query_list], 5, chunk_index_map, [])
 
     # 2. 1차 기본 검색
     _execute_search(QUERIES)
@@ -149,7 +100,7 @@ def research(state: Dict[str, Any]) -> Dict[str, Any]:
     # direct 근거 확보 여부 확인
     covered_techs = {
         tech
-        for c in accumulated_chunks
+        for c in chunk_index_map.values()
         if c.get("scope") == "direct"
         for tech in c.get("applies_to", [])
     }
@@ -162,11 +113,12 @@ def research(state: Dict[str, Any]) -> Dict[str, Any]:
         supplemental_searches = len(supplemental_queries)
 
     # 4. LLM 실행
+    accumulated_chunks = list(chunk_index_map.values())
     prompt_context = format_chunks(accumulated_chunks)
     generated_text = run_node(INSTRUCTION, domain, prompt_context)
 
     # 5. 본문 인용 파싱 및 검증
-    all_citations = HEX_CITATION_RE.findall(generated_text)
+    all_citations = CITATION_RE.findall(generated_text)
     valid_citations = [cid for cid in all_citations if cid in chunk_index_map]
     invalid_citations = [cid for cid in all_citations if cid not in chunk_index_map]
     cited_ids_set = set(valid_citations)
@@ -222,59 +174,19 @@ def research(state: Dict[str, Any]) -> Dict[str, Any]:
     claims: List[Claim] = []
     unbacked_gaps: List[Gap] = []
     if status != "failed":
-        tq_text, itme_text = _split_technology_sections(generated_text)
+        body = claim_body(generated_text)   # 근거 공백 줄은 Gap 으로 따로 남는다
+        tq_text, itme_text = _split_technology_sections(body)
 
         if tq_text and itme_text:
             # 기술별 Claim 분리 생성
-            tq_cits = [cid for cid in HEX_CITATION_RE.findall(tq_text) if cid in cited_ids_set]
-            itme_cits = [cid for cid in HEX_CITATION_RE.findall(itme_text) if cid in cited_ids_set]
-
-            # §6 — 근거가 없는 항목은 Claim 이 아니라 Gap 이다.
-            if tq_cits:
-                claims.append(
-                    Claim(
-                        claim_id=f"claim_research_tq_{run_id[:8]}",
-                        text=tq_text,
-                        technology="TurboQuant",
-                        kind="fact",
-                        evidence_ids=list(dict.fromkeys(tq_cits)),
-                    )
-                )
-            else:
-                unbacked_gaps.append(
-                    Gap(
-                        role="research",
-                        technology="TurboQuant",
-                        item="TurboQuant 절 인용 근거 미확보",
-                        reason="본문 해당 절에 유효한 인용 ID 가 없다",
-                    )
-                )
-            # §6 — 근거가 없는 항목은 Claim 이 아니라 Gap 이다.
-            if itme_cits:
-                claims.append(
-                    Claim(
-                        claim_id=f"claim_research_itme_{run_id[:8]}",
-                        text=itme_text,
-                        technology="ITME",
-                        kind="fact",
-                        evidence_ids=list(dict.fromkeys(itme_cits)),
-                    )
-                )
-            else:
-                unbacked_gaps.append(
-                    Gap(
-                        role="research",
-                        technology="ITME",
-                        item="ITME 절 인용 근거 미확보",
-                        reason="본문 해당 절에 유효한 인용 ID 가 없다",
-                    )
-                )
+            claims, unbacked_gaps = section_claims(
+                "research", {"TurboQuant": tq_text, "ITME": itme_text}, TECHS, cited_ids_set, run_id)
         else:
             # 섹션 분리가 안 된 경우 fallback 단일 Claim
             claims.append(
                 Claim(
                     claim_id=f"claim_research_all_{run_id[:8]}",
-                    text=generated_text,
+                    text=body,
                     technology="both",
                     kind="fact",
                     evidence_ids=list(dict.fromkeys(valid_citations)),
@@ -282,7 +194,8 @@ def research(state: Dict[str, Any]) -> Dict[str, Any]:
             )
 
     # 6-4. Gap 구성
-    gap_objects = _extract_gaps_from_text(generated_text) + unbacked_gaps
+    gap_objects = (gaps_from_text(generated_text, "research", "제공된 근거에서 확인하지 못함")
+                   + unbacked_gaps + invalid_gaps("research", TECHS, invalid_citations))
 
     # 원문 미확보 기술에 대한 명시적 Gap 기록
     for tech in TECHS:
@@ -306,19 +219,16 @@ def research(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     # 7. trace 이벤트 생성 (Event 스키마 호환 dict)
-    trace_event = {
-        "node": "research",
-        "status": status,
-        "attempt": 1,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "chunks": len(accumulated_chunks),
-        "citations": len(valid_citations),
-        "invalid_citations": len(invalid_citations),
-        "supplemental_searches": supplemental_searches,
-        "covered_techs": sorted(list(cited_covered_techs)),
-    }
+    trace_event = event(
+        "research", status,
+        chunks=len(accumulated_chunks),
+        citations=len(valid_citations),
+        invalid_citations=len(invalid_citations),
+        supplemental_searches=supplemental_searches,
+        covered_techs=sorted(cited_covered_techs),
+    )
 
-    # 8. State 14필드 단독 쓰기 반환
+    # 8. State 단독 쓰기 반환 — research 는 Worker 가 아니라 worker_meta 가 없다
     return {
         "research": assessment.model_dump(),
         "trace": [trace_event],

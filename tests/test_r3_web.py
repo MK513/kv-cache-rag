@@ -159,3 +159,9 @@ def test_non_200_untrusted_long_error_page_is_rejected(tmp_path):
     s = store(tmp_path, transport=lambda url, **k: web.FetchedPage(url, 200, {'content-type': 'text/html'},
         ('<html><head><title>Just a moment...</title></head><body>' + 'Checking your browser. ' * 20 + '</body></html>').encode()))
     assert s.fetch('https://example.org/a')['status'] == 'failed'
+
+
+@pytest.mark.parametrize('subdir', ['../x', 'a/b', ''])
+def test_invalid_subdir_is_rejected(tmp_path, subdir):
+    with pytest.raises(ValueError):
+        store(tmp_path, subdir=subdir)

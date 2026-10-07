@@ -17,12 +17,11 @@
     - Gap 객체의 technology(TurboQuant/ITME/both) 분기 처리
 """
 
-import json
 import re
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Tuple
 
-from src.agents.common import run_node
+from src.agents.common import (CITATION_RE, claim_body, claim_technology, event, gaps_from_text, invalid_gaps,
+                               retrieve, run_node, section_claims, task_for, worker_meta)
 from src.schema import Assessment, Claim, Evidence, Gap, Source
 from src.tools.docs import bind_document_search, format_chunks
 
@@ -80,49 +79,10 @@ MATURITY_SYSTEM_PROMPT = f"""당신은 데이터센터 인프라 기술의 실�
 근거 공백: <공백 내용 1> | <공백 내용 2>
 (공백이 없을 경우) 근거 공백: 없음"""
 
-TECHS = ["TurboQuant", "ITME"]
-
 BASE_QUERIES = [
     "실험 환경 하드웨어 구현 공개 범위 prototype testbed code repository",
     "실제 배포 운영 사례 프로토타입 시뮬레이션 production workload evaluation trace",
 ]
-
-HEX_CITATION_RE = re.compile(r"\[([0-9a-f]{12})\]")
-
-
-def _extract_gaps_from_text(text: str) -> List[Gap]:
-    """본문 마지막 줄의 '근거 공백: ...' 패턴을 파싱하여 Gap 객체 목록으로 변환."""
-    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
-    if not lines:
-        return []
-    last_line = lines[-1]
-    if not last_line.startswith("근거 공백:"):
-        return []
-
-    payload = last_line.replace("근거 공백:", "").strip()
-    if payload in ("", "없음", "None"):
-        return []
-
-    raw_items = [g.strip() for g in payload.split("|") if g.strip()]
-    gap_objects: List[Gap] = []
-    for item in raw_items:
-        tech_matched = "both"
-        lower_item = item.lower()
-        if "turboquant" in lower_item and "itme" not in lower_item:
-            tech_matched = "TurboQuant"
-        elif "itme" in lower_item and "turboquant" not in lower_item:
-            tech_matched = "ITME"
-
-        gap_objects.append(
-            Gap(
-                role="maturity",
-                technology=tech_matched,
-                item=item,
-                reason="TRL 상위 구간 미도달 또는 실증 데이터 미확인",
-            )
-        )
-    return gap_objects
-
 
 def _split_technology_sections(text: str) -> Tuple[str, str]:
     """본문에서 TurboQuant 서술부와 ITME 서술부를 분리."""
@@ -164,28 +124,23 @@ def maturity(state: Dict[str, Any]) -> Dict[str, Any]:
     # 1. R3 계약에 따른 maturity 전용 검색 도구 바인딩 (papers_core, direct/comparison 자동 강제)
     doc_search = bind_document_search("maturity")
 
-    accumulated_chunks: List[Dict[str, Any]] = []
+    techs, queries, note = task_for(state, BASE_QUERIES)
     chunk_index_map: Dict[str, Dict[str, Any]] = {}
+    attempted: List[str] = []
 
     def _execute_search(query_list: List[str], tech: str):
-        for q in query_list:
-            hits = doc_search.invoke({"query": q, "technology": tech, "top_k": 4})
-            for c in hits:
-                cid = c.get("chunk_id")
-                if cid and cid not in chunk_index_map:
-                    chunk_index_map[cid] = c
-                    accumulated_chunks.append(c)
+        retrieve(doc_search, [(q, tech) for q in query_list], 4, chunk_index_map, attempted)
 
-    # 2. 1차 기본 검색 수행
-    for tech in TECHS:
-        _execute_search(BASE_QUERIES, tech)
+    # 2. 1차 기본 검색 수행 (Task 가 있으면 Task 의 기술·질의)
+    for tech in techs:
+        _execute_search(queries, tech)
 
     # 3. 보완 검색 (노드 내부 1회 루프): 기술별 코드/테스트베드 근거 부족 시 추가 탐색
     supplemental_searches = 0
-    for tech in TECHS:
+    for tech in techs:
         has_tech_chunks = any(
             tech in c.get("applies_to", [])
-            for c in accumulated_chunks
+            for c in chunk_index_map.values()
         )
         if not has_tech_chunks:
             supp_q = (
@@ -197,11 +152,12 @@ def maturity(state: Dict[str, Any]) -> Dict[str, Any]:
             supplemental_searches += 1
 
     # 4. LLM 실행
+    accumulated_chunks = list(chunk_index_map.values())
     prompt_context = format_chunks(accumulated_chunks)
-    generated_text = run_node(MATURITY_SYSTEM_PROMPT, domain, prompt_context)
+    generated_text = run_node(MATURITY_SYSTEM_PROMPT + note, domain, prompt_context)
 
     # 5. 본문 인용 파싱 및 검증
-    all_citations = HEX_CITATION_RE.findall(generated_text)
+    all_citations = CITATION_RE.findall(generated_text)
     valid_citations = [cid for cid in all_citations if cid in chunk_index_map]
     invalid_citations = [cid for cid in all_citations if cid not in chunk_index_map]
     cited_ids_set = set(valid_citations)
@@ -242,9 +198,9 @@ def maturity(state: Dict[str, Any]) -> Dict[str, Any]:
         for cid in cited_ids_set
         for t in chunk_index_map[cid].get("applies_to", [])
         if chunk_index_map[cid].get("collection") == "papers_core"
-    }
+    } & set(techs)
 
-    if len(covered_techs) == len(TECHS) and valid_citations and not invalid_citations:
+    if len(covered_techs) == len(techs) and valid_citations and not invalid_citations:
         status = "completed"
     elif valid_citations and not invalid_citations:
         status = "partial"
@@ -255,67 +211,28 @@ def maturity(state: Dict[str, Any]) -> Dict[str, Any]:
     claims: List[Claim] = []
     unbacked_gaps: List[Gap] = []
     if status != "failed":
-        tq_text, itme_text = _split_technology_sections(generated_text)
+        body = claim_body(generated_text)   # 근거 공백 줄은 Gap 으로 따로 남는다
+        tq_text, itme_text = _split_technology_sections(body)
 
         if tq_text and itme_text:
             # 기술별 Claim 분리 생성
-            tq_cits = [cid for cid in HEX_CITATION_RE.findall(tq_text) if cid in cited_ids_set]
-            itme_cits = [cid for cid in HEX_CITATION_RE.findall(itme_text) if cid in cited_ids_set]
-
-            # §6 — 근거가 없는 항목은 Claim 이 아니라 Gap 이다.
-            if tq_cits:
-                claims.append(
-                    Claim(
-                        claim_id=f"claim_maturity_tq_{run_id[:8]}",
-                        text=tq_text,
-                        technology="TurboQuant",
-                        kind="fact",
-                        evidence_ids=list(dict.fromkeys(tq_cits)),
-                    )
-                )
-            else:
-                unbacked_gaps.append(
-                    Gap(
-                        role="maturity",
-                        technology="TurboQuant",
-                        item="TurboQuant 절 인용 근거 미확보",
-                        reason="본문 해당 절에 유효한 인용 ID 가 없다",
-                    )
-                )
-            # §6 — 근거가 없는 항목은 Claim 이 아니라 Gap 이다.
-            if itme_cits:
-                claims.append(
-                    Claim(
-                        claim_id=f"claim_maturity_itme_{run_id[:8]}",
-                        text=itme_text,
-                        technology="ITME",
-                        kind="fact",
-                        evidence_ids=list(dict.fromkeys(itme_cits)),
-                    )
-                )
-            else:
-                unbacked_gaps.append(
-                    Gap(
-                        role="maturity",
-                        technology="ITME",
-                        item="ITME 절 인용 근거 미확보",
-                        reason="본문 해당 절에 유효한 인용 ID 가 없다",
-                    )
-                )
+            claims, unbacked_gaps = section_claims(
+                "maturity", {"TurboQuant": tq_text, "ITME": itme_text}, techs, cited_ids_set, run_id)
         else:
             # 섹션 분리가 안 된 경우 fallback
             claims.append(
                 Claim(
                     claim_id=f"claim_maturity_all_{run_id[:8]}",
-                    text=generated_text,
-                    technology="both",
+                    text=body,
+                    technology=claim_technology(techs),
                     kind="fact",
                     evidence_ids=list(dict.fromkeys(valid_citations)),
                 )
             )
 
     # 6-4. Gap 객체 구성
-    gap_objects = _extract_gaps_from_text(generated_text) + unbacked_gaps
+    gap_objects = (gaps_from_text(generated_text, "maturity", "TRL 상위 구간 미도달 또는 실증 데이터 미확인", techs=techs)
+                   + unbacked_gaps + invalid_gaps("maturity", techs, invalid_citations))
 
     # 6-5. Assessment 최종 조립
     assessment = Assessment(
@@ -327,20 +244,20 @@ def maturity(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     # 7. trace 이벤트 생성 (Event 스키마 호환 dict, 누적 리듀서 등록)
-    trace_event = {
-        "node": "maturity",
-        "status": status,
-        "attempt": 1,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "chunks": len(accumulated_chunks),
-        "citations": len(valid_citations),
-        "invalid_citations": len(invalid_citations),
-        "supplemental_searches": supplemental_searches,
-        "covered_techs": sorted(list(covered_techs)),
-    }
+    trace_event = event(
+        "maturity", status,
+        chunks=len(accumulated_chunks),
+        citations=len(valid_citations),
+        invalid_citations=len(invalid_citations),
+        supplemental_searches=supplemental_searches,
+        covered_techs=sorted(covered_techs),
+    )
 
-    # 8. State 14필드 단독 쓰기 반환
-    return {
+    # 8. State 단독 쓰기 반환 (Worker 로 호출되면 조사 이력도 돌려준다)
+    out = {
         "maturity": assessment.model_dump(),
         "trace": [trace_event],
     }
+    if state.get("task"):
+        out["worker_meta"] = worker_meta(chunk_index_map, attempted, techs)
+    return out

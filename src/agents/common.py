@@ -11,7 +11,8 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
 from src.llm import get_llm
-from src.schema import Gap
+from src.schema import TECHS, Claim, Gap, WorkerMeta
+from src.settings import settings
 
 # ── 0단계 계약: 공통 함수 (코드 검토 D4~D6) ──────────────────────────────────
 # 에이전트 4개·report 에 같은 정규식·Gap 파서·trace 조립이 따로 있다. 여기에 하나로 두고,
@@ -28,10 +29,12 @@ def event(node: str, status: str = "ok", attempt: int = 1, **fields) -> dict:
                 timestamp=datetime.now(timezone.utc).isoformat(), **fields)
 
 
-def gaps_from_text(text: str, role: str, reason: str, kind: str = "evidence_gap") -> list[Gap]:
+def gaps_from_text(text: str, role: str, reason: str, kind: str = "evidence_gap",
+                   techs: list[str] = TECHS) -> list[Gap]:
     """본문 마지막의 `근거 공백: 항목1 | 항목2` 를 Gap 으로 바꾼다.
 
     항목에 한 기술 이름만 나오면 그 기술, 둘 다 나오거나 없으면 both 로 둔다.
+    techs(Task 대상 기술) 밖 기술의 항목은 버리고, 한 기술만 맡았으면 both 대신 그 기술로 둔다.
     """
     matches = _GAP_LINE_RE.findall(text or "")
     if not matches:
@@ -47,8 +50,93 @@ def gaps_from_text(text: str, role: str, reason: str, kind: str = "evidence_gap"
             technology = "TurboQuant"
         elif "itme" in lower and "turboquant" not in lower:
             technology = "ITME"
+        if technology == "both":
+            technology = claim_technology(techs)
+        elif technology not in techs:
+            continue
         gaps.append(Gap(role=role, technology=technology, item=item, reason=reason, kind=kind))
     return gaps
+
+
+def claim_body(text: str) -> str:
+    """본문에서 `근거 공백:` 줄을 뺀다. 그 줄은 gaps_from_text 가 Gap 으로 따로 남기므로 Claim 본문이 아니다."""
+    return _GAP_LINE_RE.sub("", text or "").strip()
+
+
+# ── Task 입력 · 조사 이력 (계획서 §4, §11-4 B) ──────────────────────────────────
+
+def task_for(state, default_queries: list) -> tuple[list[str], list, str]:
+    """(대상 기술, 질의, 지시문 덧붙임). Task 가 없으면(research·기존 그래프) 기본값.
+
+    덧붙임에 focus·rationale 이 들어가 프롬프트가 달라지므로 LLM 캐시가 이전 라운드 응답을
+    재생하지 않는다.
+    """
+    task = state.get("task")
+    if not task:
+        return list(TECHS), list(default_queries), ""
+    note = (f"\n\n[이번 조사 범위]\n대상 기술: {', '.join(task['technologies'])} "
+            f"(다른 기술은 쓰지 않는다)\n조사 초점: {task['focus']}")
+    if task.get("rationale"):
+        note += f"\n배경: {task['rationale']}"
+    return list(task["technologies"]), list(task["queries"]), note
+
+
+def retrieve(search, pairs, top_k: int, found: dict, attempted: list) -> None:
+    """(질의, 기술) 마다 검색해 found(chunk_id → 청크, 첫 등장 순)와 attempted 를 채운다."""
+    for query, technology in pairs:
+        attempted.append(query)
+        for chunk in search.invoke({"query": query, "technology": technology, "top_k": top_k}):
+            if chunk.get("chunk_id"):
+                found.setdefault(chunk["chunk_id"], chunk)
+
+
+def worker_meta(found: dict, attempted: list, techs: list[str]) -> dict:
+    """schema.WorkerMeta. retrieved 는 대상 기술에 해당하는 유사도 τ 이상 청크 수.
+
+    τ 보정 전(null)이면 점수로 거르지 않는다. 다른 기술 청크는 세지 않는다 — "대상 기술을
+    조사해 찾은 근거 수" 여야 evidence_gap 판정에 쓸 수 있다. 배경 검색 청크는 호출자가 빼고 넘긴다.
+    """
+    tau = (settings().get("orchestrator") or {}).get("split", {}).get("tau")
+    retrieved = sum(1 for c in found.values()
+                    if set(c.get("applies_to", [])) & set(techs)
+                    and (tau is None or c.get("cosine_score", 0) >= tau))
+    return WorkerMeta(attempted_queries=list(dict.fromkeys(attempted)), retrieved=retrieved).model_dump()
+
+
+def invalid_gaps(role: str, techs: list[str], invalid: list[str]) -> list[Gap]:
+    """근거에 없는 인용 ID 가 있으면 대상 기술마다 invalid_evidence.
+
+    인용 위조로 failed 가 된 칸을 "조사했으나 근거 없음"(evidence_gap) 과 구분해,
+    커버리지 통과 근거가 되지 못하게 한다 (계획서 §3, §7-1).
+    """
+    if not invalid:
+        return []
+    return [Gap(role=role, technology=tech, item=f"{tech} 인용 무효",
+                reason=f"검색 결과에 없는 인용 ID {len(set(invalid))}개", kind="invalid_evidence")
+            for tech in techs]
+
+
+_TAG = {"TurboQuant": "tq", "ITME": "itme"}
+
+
+def section_claims(role: str, sections: dict, techs: list[str], cited: set, run_id: str):
+    """기술별 절 → (Claim, Gap). 대상 기술만 만든다. 인용이 없는 절은 Claim 이 아니라 Gap (§6)."""
+    claims, gaps = [], []
+    for tech in techs:
+        text = sections.get(tech, "")
+        ids = list(dict.fromkeys(c for c in CITATION_RE.findall(text) if c in cited))
+        if ids:
+            claims.append(Claim(claim_id=f"claim_{role}_{_TAG[tech]}_{run_id[:8]}", text=text,
+                                technology=tech, kind="fact", evidence_ids=ids))
+        else:
+            gaps.append(Gap(role=role, technology=tech, item=f"{tech} 절 인용 근거 미확보",
+                            reason="본문 해당 절에 유효한 인용 ID 가 없다"))
+    return claims, gaps
+
+
+def claim_technology(techs: list[str], default: str = "both") -> str:
+    """한 기술만 맡은 Task 면 그 기술, 아니면 default."""
+    return techs[0] if len(techs) == 1 else default
 
 GROUND_RULES = """공통 규칙:
 - 아래 <document> 근거에 있는 내용만 쓴다. 없는 내용을 추론으로 채우지 않는다.

@@ -17,12 +17,10 @@
     - 기술별(TurboQuant/ITME) Gap 객체 분기
 """
 
-import json
-import re
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Tuple
 
-from src.agents.common import run_node
+from src.agents.common import (CITATION_RE, claim_body, claim_technology, event, gaps_from_text, invalid_gaps, retrieve,
+                               run_node, task_for, worker_meta)
 from src.schema import Assessment, Claim, Evidence, Gap, Source
 from src.tools.docs import bind_document_search, format_chunks
 
@@ -56,50 +54,10 @@ INSTRUCTION = """당신은 데이터센터 및 클라우드 AI 추론 인프라 
 근거 공백: <공백 내용 1> | <공백 내용 2>
 (공백이 없는 경우) 근거 공백: 없음"""
 
-TECHS = ["TurboQuant", "ITME"]
-
 QUERIES = [
     "처리량 배치 크기 동시 요청 처리 serving batch throughput concurrency",
     "지연 정확도 손실 비용 오버헤드 latency accuracy degradation TTFT",
 ]
-
-HEX_CITATION_RE = re.compile(r"\[([0-9a-f]{12})\]")
-
-
-def _extract_gaps_from_text(text: str) -> List[Gap]:
-    """본문 마지막 줄의 '근거 공백: ...' 패턴을 파싱하여 Gap 객체 목록으로 변환."""
-    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
-    if not lines:
-        return []
-    last_line = lines[-1]
-    if not last_line.startswith("근거 공백:"):
-        return []
-
-    payload = last_line.replace("근거 공백:", "").strip()
-    if payload in ("", "없음", "None"):
-        return []
-
-    raw_items = [g.strip() for g in payload.split("|") if g.strip()]
-    gap_objects: List[Gap] = []
-    for item in raw_items:
-        # 기술명 식별에 따른 tech 할당 (R5 관점 상충 및 갭 분석 정밀화)
-        tech_matched = "both"
-        lower_item = item.lower()
-        if "turboquant" in lower_item and "itme" not in lower_item:
-            tech_matched = "TurboQuant"
-        elif "itme" in lower_item and "turboquant" not in lower_item:
-            tech_matched = "ITME"
-
-        gap_objects.append(
-            Gap(
-                role="domain",
-                technology=tech_matched,
-                item=item,
-                reason="도메인 인프라 실증 또는 결합 워크로드 실측 근거 미확인",
-            )
-        )
-    return gap_objects
-
 
 def _split_body_and_hypothesis(text: str) -> Tuple[str, str]:
     """본문에서 실증 사실 서술부와 결합 가설부를 분리."""
@@ -129,37 +87,26 @@ def domain_assessment(state: Dict[str, Any]) -> Dict[str, Any]:
     core_search = bind_document_search("domain")               # papers_core (direct/comparison)
     context_search = bind_document_search("domain", "context") # context (comparison/secondary)
 
-    accumulated_chunks: List[Dict[str, Any]] = []
-    chunk_index_map: Dict[str, Dict[str, Any]] = {}
+    techs, queries, note = task_for(state, QUERIES)
+    core_chunks: Dict[str, Dict[str, Any]] = {}
+    attempted: List[str] = []
 
-    # 2. papers_core 컬렉션 검색 (실증 벤치마크)
-    for tech in TECHS:
-        for q in QUERIES:
-            hits = core_search.invoke({"query": q, "technology": tech, "top_k": 4})
-            for c in hits:
-                cid = c.get("chunk_id")
-                if cid and cid not in chunk_index_map:
-                    chunk_index_map[cid] = c
-                    accumulated_chunks.append(c)
+    # 2. papers_core 컬렉션 검색 (실증 벤치마크. Task 가 있으면 Task 의 기술·질의)
+    retrieve(core_search, [(q, tech) for tech in techs for q in queries], 4, core_chunks, attempted)
 
-    # 3. context 컬렉션 검색 (인프라 배경 및 비용 구조)
-    context_hits = context_search.invoke({
-        "query": "데이터센터 추론 동시성 메모리 비용 구조 TCO",
-        "technology": "both",
-        "top_k": 3,
-    })
-    for c in context_hits:
-        cid = c.get("chunk_id")
-        if cid and cid not in chunk_index_map:
-            chunk_index_map[cid] = c
-            accumulated_chunks.append(c)
+    # 3. context 컬렉션 검색 (인프라 배경 및 비용 구조). 고정 배경 검색이라 조사 이력(worker_meta)에
+    #    넣지 않는다 — context 문서는 applies_to 가 두 기술 모두라 retrieved 를 부풀린다.
+    chunk_index_map: Dict[str, Dict[str, Any]] = dict(core_chunks)
+    retrieve(context_search, [("데이터센터 추론 동시성 메모리 비용 구조 TCO", "both")], 3,
+             chunk_index_map, [])
 
     # 4. LLM 실행
+    accumulated_chunks = list(chunk_index_map.values())
     prompt_context = format_chunks(accumulated_chunks)
-    generated_text = run_node(INSTRUCTION, domain, prompt_context)
+    generated_text = run_node(INSTRUCTION + note, domain, prompt_context)
 
     # 5. 본문 인용 파싱 및 검증
-    all_citations = HEX_CITATION_RE.findall(generated_text)
+    all_citations = CITATION_RE.findall(generated_text)
     valid_citations = [cid for cid in all_citations if cid in chunk_index_map]
     invalid_citations = [cid for cid in all_citations if cid not in chunk_index_map]
     cited_ids_set = set(valid_citations)
@@ -194,7 +141,7 @@ def domain_assessment(state: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     # 6-2. 사실 및 결합 가설 분리하여 Claim 생성
-    facts_text, hypothesis_text = _split_body_and_hypothesis(generated_text)
+    facts_text, hypothesis_text = _split_body_and_hypothesis(claim_body(generated_text))
 
     # 6-3. 상태 판정 (completed / partial / failed)
     # 인용된 청크 중 papers_core에서 커버된 기술 계산
@@ -203,9 +150,9 @@ def domain_assessment(state: Dict[str, Any]) -> Dict[str, Any]:
         for cid in cited_ids_set
         for t in chunk_index_map[cid].get("applies_to", [])
         if chunk_index_map[cid].get("collection") == "papers_core"
-    }
+    } & set(techs)
 
-    if len(covered_techs) == len(TECHS) and valid_citations and not invalid_citations:
+    if len(covered_techs) == len(techs) and valid_citations and not invalid_citations:
         status = "completed"
     elif valid_citations and not invalid_citations:
         status = "partial"
@@ -217,13 +164,13 @@ def domain_assessment(state: Dict[str, Any]) -> Dict[str, Any]:
     gap_objects_extra: List[Gap] = []
     if status != "failed":
         # 1) 실증 분석 부문 (fact: 유효 인용 ID 바인딩)
-        fact_citations = [cid for cid in HEX_CITATION_RE.findall(facts_text or "") if cid in cited_ids_set]
+        fact_citations = [cid for cid in CITATION_RE.findall(facts_text or "") if cid in cited_ids_set]
         if facts_text and fact_citations:
             claims.append(
                 Claim(
                     claim_id=f"claim_domain_fact_{run_id[:8]}",
                     text=facts_text,
-                    technology="both",
+                    technology=claim_technology(techs),
                     kind="fact",
                     evidence_ids=list(dict.fromkeys(fact_citations)),
                 )
@@ -232,6 +179,9 @@ def domain_assessment(state: Dict[str, Any]) -> Dict[str, Any]:
         # 2) 결합 가설 부문
         # §6 — 추론과 가설에도 전제가 된 근거와 설명을 연결한다. 전제가 없으면
         # Claim 이 아니라 Gap 이다(§5 — 결합 효과는 결합 실험이 없으면 가설로만 적는다).
+        # 한 기술만 맡은 Task 는 결합 가설을 만들지 않는다 — both 칸은 두 기술 Task 만 다룬다 (§4, §5).
+        if len(techs) < 2:
+            hypothesis_text = ""
         hypothesis_premise = list(dict.fromkeys(valid_citations))
         if hypothesis_text and hypothesis_premise:
             claims.append(
@@ -255,7 +205,9 @@ def domain_assessment(state: Dict[str, Any]) -> Dict[str, Any]:
             )
 
     # 6-5. Gap 객체 생성
-    gap_objects = _extract_gaps_from_text(generated_text) + gap_objects_extra
+    gap_objects = (gaps_from_text(generated_text, "domain", "도메인 인프라 실증 또는 결합 워크로드 실측 근거 미확인",
+                                  techs=techs)
+                   + gap_objects_extra + invalid_gaps("domain", techs, invalid_citations))
 
     # 6-6. Assessment 최종 조립
     assessment = Assessment(
@@ -267,19 +219,19 @@ def domain_assessment(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     # 7. trace 이벤트 생성 (Event 스키마 호환 dict, 누적 리듀서 등록)
-    trace_event = {
-        "node": "domain_assessment",
-        "status": status,
-        "attempt": 1,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "chunks": len(accumulated_chunks),
-        "citations": len(valid_citations),
-        "invalid_citations": len(invalid_citations),
-        "covered_techs": sorted(list(covered_techs)),
-    }
+    trace_event = event(
+        "domain_assessment", status,
+        chunks=len(accumulated_chunks),
+        citations=len(valid_citations),
+        invalid_citations=len(invalid_citations),
+        covered_techs=sorted(covered_techs),
+    )
 
-    # 8. State 14필드 단독 쓰기 반환
-    return {
+    # 8. State 단독 쓰기 반환 (Worker 로 호출되면 조사 이력도 돌려준다)
+    out = {
         "domain_assessment": assessment.model_dump(),
         "trace": [trace_event],
     }
+    if state.get("task"):
+        out["worker_meta"] = worker_meta(core_chunks, attempted, techs)
+    return out

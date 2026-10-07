@@ -118,6 +118,7 @@ def test_invalid_citation_forces_failed_and_empty_claims(monkeypatch):
 
     assert a["status"] == "failed"
     assert a["claims"] == []
+    assert sorted(g["technology"] for g in a["gaps"] if g["kind"] == "invalid_evidence") == ["ITME", "TurboQuant"]
 
 
 def test_no_citations_at_all_forces_failed(monkeypatch):
