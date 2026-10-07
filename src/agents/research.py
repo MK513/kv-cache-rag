@@ -13,10 +13,9 @@
     - Gap 객체의 technology(TurboQuant/ITME/both) 분기 처리
 """
 
-import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
-from src.agents.common import CITATION_RE, claim_body, event, gaps_from_text, invalid_gaps, retrieve, run_node, section_claims
+from src.agents.common import CITATION_RE, claim_body, event, gaps_from_text, invalid_gaps, retrieve, run_node, section_claims, split_by_tech
 from src.schema import TECHS, Assessment, Claim, Evidence, Gap, Source
 from src.tools.docs import bind_document_search, format_chunks
 
@@ -52,25 +51,6 @@ QUERIES = [
     "성능 한계, 오버헤드, 양자화 손실 및 미해결 제약사항",
 ]
 WIDEN = " 벤치마크 처리량 지연시간 정확도 오버헤드 theoretical bound"
-
-def _split_technology_sections(text: str) -> Tuple[str, str]:
-    """본문에서 TurboQuant 서술부와 ITME 서술부를 분리."""
-    tq_pattern = r"(?:^|\n)(?:1\.\s*TurboQuant|###\s*1\.\s*TurboQuant|TurboQuant\s*(?:접근|조사|기술))"
-    itme_pattern = r"(?:^|\n)(?:2\.\s*ITME|###\s*2\.\s*ITME|ITME\s*(?:접근|조사|기술))"
-
-    tq_match = re.search(tq_pattern, text, re.IGNORECASE)
-    itme_match = re.search(itme_pattern, text, re.IGNORECASE)
-
-    if tq_match and itme_match:
-        tq_start = tq_match.start()
-        itme_start = itme_match.start()
-        if tq_start < itme_start:
-            tq_text = text[tq_start:itme_start].strip()
-            itme_text = text[itme_start:].strip()
-            return tq_text, itme_text
-
-    # 패턴 매칭이 실패한 경우 전체를 통짜로 반환
-    return text.strip(), ""
 
 
 def research(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -175,12 +155,11 @@ def research(state: Dict[str, Any]) -> Dict[str, Any]:
     unbacked_gaps: List[Gap] = []
     if status != "failed":
         body = claim_body(generated_text)   # 근거 공백 줄은 Gap 으로 따로 남는다
-        tq_text, itme_text = _split_technology_sections(body)
+        sections = split_by_tech(body)
 
-        if tq_text and itme_text:
+        if sections:
             # 기술별 Claim 분리 생성
-            claims, unbacked_gaps = section_claims(
-                "research", {"TurboQuant": tq_text, "ITME": itme_text}, TECHS, cited_ids_set, run_id)
+            claims, unbacked_gaps = section_claims("research", sections, TECHS, cited_ids_set, run_id)
         else:
             # 섹션 분리가 안 된 경우 fallback 단일 Claim
             claims.append(

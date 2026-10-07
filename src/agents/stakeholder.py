@@ -6,7 +6,7 @@ structural completion; R5 must still perform the human semantic review.
 import json
 from src.agents.common import task_for
 from src.agents.stakeholder_contract import StakeholderDraft
-from src.schema import WorkerMeta
+from src.schema import TECHS, WorkerMeta
 from src.tools.web_search import WebEvidenceStore, format_signals
 from src.tools.web_store import digest, save_json, utcnow
 
@@ -85,7 +85,12 @@ def make_stakeholder(store: WebEvidenceStore, *, writer=None):
         # 주체별 질의(QUERIES)는 커버리지 단위라 유지하고, Task 질의는 각 주체 질의 뒤에 붙인다.
         # 검색 횟수는 그대로라 web_budget 계산이 바뀌지 않는다 (계획서 §11-4 B).
         techs, task_queries, note = task_for(state, [])
-        task_terms = ' '.join(task_queries)
+
+        def task_terms(tech):
+            # 다른 기술 이름이 든 Task 질의는 붙이지 않는다. 다 붙이면 TurboQuant 검색에 ITME 질의가
+            # 섞여 ITME 자료를 TurboQuant 근거로 인용하는 교차 인용이 생겼다(20261007 실행).
+            others = [t.lower() for t in TECHS if t != tech]
+            return ' '.join(q for q in task_queries if not any(o in q.lower() for o in others))
         attempted, searched = [], set()      # 실제로 실행된 검색만 (예산 차단·실패 제외)
         fetched, allowed = {}, {tech: set() for tech in techs}
         pair_results, supplemented = {}, set()
@@ -100,7 +105,7 @@ def make_stakeholder(store: WebEvidenceStore, *, writer=None):
 
         def collect(tech, group, attempt):
             nonlocal successful_searches
-            q = ' '.join(filter(None, [QUERIES[group], task_terms,
+            q = ' '.join(filter(None, [QUERIES[group], task_terms(tech),
                                        'official statement primary source' if attempt == 2 else '']))
             got = False
             if attempt == 2:
@@ -131,7 +136,7 @@ def make_stakeholder(store: WebEvidenceStore, *, writer=None):
             if not present:
                 pair_results[tech, group] = collect(tech, group, 2)
 
-        claims, draft_gaps = [], []
+        claims, draft_gaps, dropped_pairs = [], [], set()
         all_evidence, sources = {}, {}
         repair_used, model_calls = False, 0
         # Draft -> one evidence-gap supplementation -> regenerate. Citation repair
@@ -168,24 +173,35 @@ def make_stakeholder(store: WebEvidenceStore, *, writer=None):
                 try:
                     raw = writer(instruction=INSTRUCTION + note, domain=domain, context=context, feedback=feedback)
                     draft = raw if isinstance(raw, StakeholderDraft) else StakeholderDraft.model_validate(raw)
-                    proposed = {}
+                    proposed, rejected, dropped = {}, [], set()
                     for item in draft.claims:
                         # Task 대상이 아닌 기술의 Claim 은 근거가 없는 것으로 보고 _diagnose 가 이유를 붙인다
                         missing = set(item.evidence_ids) - (allowed.get(item.technology, set()) & visible_ids)
                         if missing:
-                            raise ValueError(_diagnose(missing, item.technology, allowed,
-                                                       visible_ids, all_evidence))
+                            problem = _diagnose(missing, item.technology, allowed, visible_ids, all_evidence)
+                        else:
+                            evidence = [all_evidence[eid] for eid in item.evidence_ids]
+                            problem = ''
+                            if any(e['run_id'] != store.run_id or sources[e['source_id']]['run_id'] != store.run_id
+                                   for e in evidence):
+                                problem = 'cross-run evidence'
+                            elif any('stakeholder' not in e['allowed_uses'] for e in evidence):
+                                problem = 'forbidden evidence use'
+                        if problem:
+                            rejected.append(problem)
+                            dropped.add((item.technology, item.stakeholder_group))
+                            continue
                         data = item.model_dump()
-                        for eid in item.evidence_ids:
-                            evidence = all_evidence[eid]
-                            source = sources[evidence['source_id']]
-                            if evidence['run_id'] != store.run_id or source['run_id'] != store.run_id:
-                                raise ValueError('cross-run evidence')
-                            if 'stakeholder' not in evidence['allowed_uses']:
-                                raise ValueError('forbidden evidence use')
                         data['claim_id'] = 'claim-' + digest(json.dumps(data, ensure_ascii=False, sort_keys=True))
                         proposed[data['claim_id']] = data
-                    claims = list(proposed.values())
+                    if rejected and (not repair_used or not proposed):
+                        raise ValueError('\n'.join(rejected))
+                    if rejected:
+                        # 수리 후에도 남은 잘못된 인용은 그 Claim 만 뺀다. 한 건 때문에 초안 전체를
+                        # 버리면 8칸이 모두 비었다(20261007 실행: 교차 인용 3건으로 Claim 0건).
+                        event('draft_validation', 'partial', model_calls, dropped=len(rejected),
+                              error='\n'.join(rejected))
+                    claims, dropped_pairs = list(proposed.values()), dropped
                     draft_gaps = [dict(role='stakeholder', **g.model_dump()) for g in draft.gaps
                                   if g.technology in techs]   # 대상 밖 기술로 보완 검색하지 않는다
                     event('draft_validation', attempt=model_calls, claims=len(claims))
@@ -218,6 +234,8 @@ def make_stakeholder(store: WebEvidenceStore, *, writer=None):
                 if (tech, group) not in covered and (tech, group) not in gaps:
                     gaps[tech, group] = dict(role='stakeholder', technology=tech, item=group,
                         reason='원문 본문 근거 미확보' if not pair_results[tech, group] else '직접 반응 또는 근거 있는 추론을 확인하지 못함')
+        for pair in dropped_pairs & gaps.keys():
+            gaps[pair]['kind'] = 'invalid_evidence'    # 인용이 거부돼 빠진 칸 — 근거 없음과 구분한다
         for pair, g in gaps.items():
             if pair not in searched:
                 # 조사하지 못한 칸은 "근거 없음" 이 아니다 — 커버리지 통과 근거가 되지 않게 한다 (§4-1 F4)

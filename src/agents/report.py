@@ -60,8 +60,8 @@ def _number_citations(markdown: str, marks: dict) -> str:
     """
     numbered = CITATION_RE.sub(
         lambda m: f"[{marks[m.group(1)]}]" if m.group(1) in marks else m.group(0), markdown)
-    # 같은 출처의 서로 다른 청크를 잇달아 인용하면 [1][1] 이 된다. 지면에는 한 번이면 된다.
-    return re.sub(r"(?:\[(\d+)\])(?:\[\1\])+", r"[\1]", numbered)
+    # 같은 출처의 서로 다른 청크를 잇달아 인용하면 [1][1]·[1] [1] 이 된다. 지면에는 한 번이면 된다.
+    return re.sub(r"\[(\d+)\](?:\s*\[\1\])+", r"[\1]", numbered)
 
 
 def _held(state: dict) -> str:
@@ -85,7 +85,7 @@ def _caps(compaction: int) -> dict:
     claims = cfg.get("max_claims_per_cell") or 3
     implications = cfg.get("max_implications") or 4
     gaps = cfg.get("max_gaps") or 12
-    chars = cfg.get("max_quote_chars") or 240
+    chars = cfg.get("max_quote_chars") or 1500
     if compaction <= 0:
         return {"claims": claims, "implications": implications, "gaps": gaps, "chars": chars}
     if compaction == 1:
@@ -195,13 +195,21 @@ def _select(state: dict, excluded: set[str], pinned: set[str], per_cell: int,
                 if c.get("claim_id") not in excluded and c not in shown[role]
                 and tech in rules.techs_of(c.get("technology", "both"))]
 
+    # 품질 평가가 편향 ③(선택적 근거)으로 되돌려 보낸 기술은 숨은 한계·비용 Claim 을 모두 싣는다.
+    bias = ((state.get("quality_eval") or {}).get("verdicts") or {}).get("bias") or {}
+    flagged = {t for t in TECHS for reason in bias.get("reasons") or []
+               if reason.startswith(f"③ {t} 선택적")}
     for tech in TECHS:
+        limits = [(r, c) for r, c in hidden(tech) if rules.is_limit_claim(c)]
+        if tech in flagged:
+            for limit in limits:
+                add(*limit)
+            continue
         if any(rules.is_limit_claim(c) and tech in rules.techs_of(c.get("technology", "both"))
                for items in shown.values() for c in items):
             continue
-        limit = next(((r, c) for r, c in hidden(tech) if rules.is_limit_claim(c)), None)
-        if limit:
-            add(*limit)
+        if limits:
+            add(*limits[0])
 
     for tech in TECHS:
         for _ in range(2):
@@ -317,7 +325,8 @@ def _claims(claims: list[dict], chars: int = 10_000) -> str:
 
     blocks = []
     for claim in claims:
-        body = _clip(claim.get("text") or "", chars)
+        # 모델이 Claim 본문에 쓴 `## TurboQuant` 같은 제목은 보고서 목차를 깨뜨린다. 제목 표시만 뗀다.
+        body = _clip(re.sub(r"^#{1,6}\s*", "", claim.get("text") or "", flags=re.MULTILINE), chars)
         kind = claim.get("kind", "")
         if kind != "fact":
             note = KIND_LABEL.get(kind, kind)

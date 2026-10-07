@@ -17,11 +17,10 @@
     - Gap 객체의 technology(TurboQuant/ITME/both) 분기 처리
 """
 
-import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 from src.agents.common import (CITATION_RE, claim_body, claim_technology, event, gaps_from_text, invalid_gaps,
-                               retrieve, run_node, section_claims, task_for, worker_meta)
+                               retrieve, run_node, section_claims, split_by_tech, task_for, worker_meta)
 from src.schema import Assessment, Claim, Evidence, Gap, Source
 from src.tools.docs import bind_document_search, format_chunks
 
@@ -83,25 +82,6 @@ BASE_QUERIES = [
     "실험 환경 하드웨어 구현 공개 범위 prototype testbed code repository",
     "실제 배포 운영 사례 프로토타입 시뮬레이션 production workload evaluation trace",
 ]
-
-def _split_technology_sections(text: str) -> Tuple[str, str]:
-    """본문에서 TurboQuant 서술부와 ITME 서술부를 분리."""
-    tq_pattern = r"(?:^|\n)(?:1\.\s*TurboQuant|###\s*1\.\s*TurboQuant|TurboQuant\s*TRL)"
-    itme_pattern = r"(?:^|\n)(?:2\.\s*ITME|###\s*2\.\s*ITME|ITME\s*TRL)"
-
-    tq_match = re.search(tq_pattern, text, re.IGNORECASE)
-    itme_match = re.search(itme_pattern, text, re.IGNORECASE)
-
-    if tq_match and itme_match:
-        tq_start = tq_match.start()
-        itme_start = itme_match.start()
-        if tq_start < itme_start:
-            tq_text = text[tq_start:itme_start].strip()
-            itme_text = text[itme_start:].strip()
-            return tq_text, itme_text
-
-    # 패턴 매칭 실패 시 fallback (전체 본문 반환)
-    return text.strip(), ""
 
 
 # ============================================================================
@@ -212,12 +192,11 @@ def maturity(state: Dict[str, Any]) -> Dict[str, Any]:
     unbacked_gaps: List[Gap] = []
     if status != "failed":
         body = claim_body(generated_text)   # 근거 공백 줄은 Gap 으로 따로 남는다
-        tq_text, itme_text = _split_technology_sections(body)
+        sections = split_by_tech(body)
 
-        if tq_text and itme_text:
+        if sections:
             # 기술별 Claim 분리 생성
-            claims, unbacked_gaps = section_claims(
-                "maturity", {"TurboQuant": tq_text, "ITME": itme_text}, techs, cited_ids_set, run_id)
+            claims, unbacked_gaps = section_claims("maturity", sections, techs, cited_ids_set, run_id)
         else:
             # 섹션 분리가 안 된 경우 fallback
             claims.append(

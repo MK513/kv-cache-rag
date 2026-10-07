@@ -14,7 +14,7 @@ llm:
   temperature: 0
   seed: 20260922              # 재현용 고정값. 바꾸면 같은 근거에서도 문장이 달라진다.
                               # temperature=0 만으로는 같은 출력이 보장되지 않는다.
-  timeout: 60                 # 호출 하나의 상한(초). 끝나지 않는 호출을 끊는다
+  timeout: 180                # 호출 하나의 상한(초). stakeholder 초안(근거 40k 자)은 60초를 넘겼다(20261007 실행)
   max_retries: 1              # SDK 내부 재시도. 그래프 재시도(재계획 라운드)와 별개
 
 retrieval:
@@ -73,7 +73,7 @@ report:
   max_claims_per_cell: 3      # 관점×기술 칸당 본문 표시 Claim 수 (압축 1단계는 절반, 2단계는 1)
   max_implications: 4         # §5.1·§5.2 각각의 표시 수
   max_gaps: 12                # §6 Gap 표시 수. 넘으면 "외 n건" 으로 접는다
-  max_quote_chars: 240        # Claim 본문 표시 길이 상한(문자)
+  max_quote_chars: 1500       # Claim 본문 표시 길이 상한(문자). Claim 은 절 단위(1~2천 자)라 240 이면 문장 중간에서 잘린다
   max_compaction: 2           # 압축 단계 상한
 
 # ── quality: 담당 C ──────────────────────────────────────────────────────────

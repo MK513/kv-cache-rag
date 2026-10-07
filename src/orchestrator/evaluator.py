@@ -509,10 +509,11 @@ def _judge_selectivity(ctx: Context, findings: Findings):
                         f"{tech} 에 대해 보고서가 성능 향상만 골라 싣고 한계·비용 근거를 빠뜨렸는지 "
                         f"판정한다.\n\n{body}")
         if result.selective:
-            collected = any(rules.is_limit_claim(claim) and covers(claim)
-                            for cid, (_, claim) in ctx.claims.items() if cid not in ctx.excluded)
-            if collected:
-                findings.fail("bias", "synthesis", f"③ {tech} 선택적 근거 사용 — {result.reason}")
+            # 어떤 Claim 을 싣는지는 report 의 _select 가 정한다. synthesis 로 보내면 표시가 바뀌지 않아
+            # 같은 판정이 반복되고 max_repairs 로 끝났다(20261007 실행). 숨은 한계·비용 Claim 이 있으면
+            # report 가 싣게 하고, 이미 다 실었으면 근거가 모자란 것이라 재조사한다.
+            if hidden_limits:
+                findings.fail("bias", "report", f"③ {tech} 선택적 근거 사용 — {result.reason}")
             else:
                 findings.fail("bias", "evidence", f"③ {tech} 한계·비용 근거 미수집 — {result.reason}",
                               [rules.cell("market", tech), rules.cell("domain_assessment", tech)])
