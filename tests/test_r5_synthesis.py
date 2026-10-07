@@ -8,6 +8,8 @@ import pytest
 from src.agents import synthesis as node
 from src.schema import Synthesis
 
+from src.agents.synthesis import SynthesisDraft
+
 
 def assessment(role, *, status="partial"):
     return {
@@ -41,7 +43,7 @@ class FakeLLM:
         self.prompt = None
 
     def with_structured_output(self, schema):
-        assert schema is Synthesis, "공용 schema 를 써야 한다"
+        assert schema is SynthesisDraft, "claim_ids 를 받는 구조화 출력을 써야 한다"
         return self
 
     def invoke(self, prompt):
@@ -119,3 +121,57 @@ def test_genuinely_new_gap_is_kept(llm):
     gaps = node.synthesis(STATE)["gaps"]
 
     assert [g["item"] for g in gaps] == ["maturity 공백", "총소유비용 정량치"]
+
+
+def test_items_keep_claim_ids_and_drop_unknown_ones(llm):
+    """L2 — 종합 항목은 근거 Claim ID 를 남긴다. 입력에 없는 ID 는 버린다."""
+    llm.result = SynthesisDraft(
+        agreements=[{"text": "공통 사실", "claim_ids": ["claim-maturity", "claim-없음"]}],
+        conflicts=[{"perspective": "TRL", "why": "실증 범위", "claim_ids": ["claim-market"]}],
+        combination_hypothesis="가설")
+    update = node.synthesis(STATE)
+    out = update["synthesis"]
+
+    assert out["agreements"] == [{"text": "공통 사실", "claim_ids": ["claim-maturity"]}]
+    assert out["conflicts"][0]["claim_ids"] == ["claim-market"]
+    assert update["trace"][0]["dropped_refs"] == 1
+    assert "(claim-maturity)" in llm.prompt          # 모델이 참조할 수 있게 ID 를 보여 준다
+
+
+def test_version_increments_and_records_round(llm):
+    first = node.synthesis(STATE | {"retry_count": 1})["synthesis"]
+    second = node.synthesis(STATE | {"synthesis": first})["synthesis"]
+
+    assert (first["synthesis_version"], first["round"]) == (1, 1)
+    assert second["synthesis_version"] == 2
+
+
+def test_invalid_claims_are_not_offered_again(llm):
+    """계획서 §5·§9 — 품질 평가·사람 검토의 무효 Claim 은 재종합에서 되살아나지 않는다."""
+    state = STATE | {"claim_flags": {"claim-market": {"status": "invalid", "by": "human_review"}}}
+    llm.result = SynthesisDraft(agreements=[{"text": "x", "claim_ids": ["claim-market"]}],
+                                combination_hypothesis="가설")
+    out = node.synthesis(state)["synthesis"]
+
+    assert "market 주장" not in llm.prompt
+    assert out["agreements"][0]["claim_ids"] == []
+
+
+def test_quality_feedback_becomes_a_rewrite_instruction(llm):
+    """품질 평가가 종합 문제로 되돌려 보내면 그 사유를 재작성 지시로 넣는다."""
+    state = STATE | {"quality_eval": {"next": "synthesis", "verdicts": {
+        "neutrality": {"status": "fail", "reasons": ["우열·추천 표현: 더 우수"]},
+        "coverage": {"status": "fail", "reasons": ["무시돼야 하는 근거 문제"]}}}}
+    node.synthesis(state)
+
+    assert "neutrality: 우열·추천 표현: 더 우수" in llm.prompt
+    assert "무시돼야 하는" not in llm.prompt
+
+
+def test_legacy_string_output_is_grounded_with_empty_refs(monkeypatch):
+    """옛 Synthesis(문자열 목록)를 돌려주는 대역도 GroundedSynthesis 로 맞춘다."""
+    fake = FakeLLM(Synthesis(agreements=["공통"], combination_hypothesis="가설"))
+    fake.with_structured_output = lambda schema: fake
+    monkeypatch.setattr(node, "get_llm", lambda: fake)
+
+    assert node.synthesis(STATE)["synthesis"]["agreements"] == [{"text": "공통", "claim_ids": []}]

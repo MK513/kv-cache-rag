@@ -197,7 +197,9 @@ def test_summary_stays_within_the_half_page_budget(monkeypatch):
     passed, message = check_summary(markdown)
     assert passed, message
     assert "외 38건은 §6 참고" in markdown      # 나머지는 절을 가리킨다
-    assert "외 4건은 §5.1 참고" in markdown
+    # §5.1 표시 상한(settings report.max_implications=4) 안에서 SUMMARY 가 나머지를 가리킨다
+    assert "외 1건은 §5.1 참고" in markdown
+    assert "외 3건은 분량 상한으로 생략했다" in markdown
 
 
 def test_gap_line_does_not_repeat_the_technology(monkeypatch):

@@ -1,14 +1,16 @@
-"""R5 자동 검증.
+"""자동 검증 — 담당 C (agent/ow-quality)
 
 LLM 채점이 아니라 결정적 검사를 수행한다.
 
 검사 대상은 `schema.Assessment` 다 — claims / evidence / sources / gaps / status.
 
-자동 검증은 구조와 출처 연결을 확인한다.
-Claim 내용이 실제 근거에서 의미적으로 도출되는지는
-human review worksheet에서 사람이 확인한다.
+자동 검증은 구조와 출처 연결을 확인한다. 품질 평가(`src/orchestrator/evaluator.py`)의
+Groundedness L1 코드 검사가 이 검사를 표시된 Claim 에 다시 쓴다.
+Claim 내용이 실제 근거에서 의미적으로 도출되는지는 품질 평가의 LLM Judge 가 보고,
+선택 단계인 Human Review 에서는 worksheet 로 사람이 확인한다.
 """
 
+from src.schema import ASSESSMENT_ROLES
 
 RAG_NODES = {
     "research": {"papers_core", "ecosystem", "context"},
@@ -186,13 +188,7 @@ def check(state) -> dict:
 
     errors = []
 
-    node_names = [
-        "research",
-        "maturity",
-        "market",
-        "stakeholder",
-        "domain_assessment",
-    ]
+    node_names = list(ASSESSMENT_ROLES)
 
     for node_name in node_names:
         assessment = state.get(node_name) or {}
