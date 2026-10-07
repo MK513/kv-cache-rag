@@ -1,12 +1,21 @@
-# 실행 설정 — 담당: R1
-# 모델은 .env 의 LLM_MODEL 로 덮어쓸 수 있다. 팀 계정에서 호출이 안 되면 fallback 을 쓴다.
+# 실행 설정
+# 모델은 .env 의 LLM_MODEL 로 덮어쓸 수 있다.
+#
+# 섹션 담당 (docs/agent/orchestrator-workers-plan.md §11-4 공유 파일 규칙)
+#   llm · orchestrator  → 담당 A (agent/ow-orchestration)
+#   report · quality    → 담당 C (agent/ow-quality)
+#   그 외 기존 섹션      → 이번 작업에서 수정하지 않는다
+# 자기 섹션 밖의 줄은 건드리지 않는다 — 다른 hunk 로 두어 merge 충돌을 피한다.
 
+# ── llm: 담당 A ──────────────────────────────────────────────────────────────
 llm:
-  model: gpt-5.6-luna
-  fallback: gpt-4.1-mini      # 위 모델 미지원/미가용 시 .env LLM_MODEL 로 교체
+  model: gpt-4.1-mini         # 계획·생성·종합·Judge 공통. temperature·seed 를 실제로 전달하는 비추론형 모델
+  judge_model: null           # null 이면 model 을 쓴다. Judge 만 다른 모델로 바꿀 때 지정
   temperature: 0
   seed: 20260922              # 재현용 고정값. 바꾸면 같은 근거에서도 문장이 달라진다.
                               # temperature=0 만으로는 같은 출력이 보장되지 않는다.
+  timeout: 60                 # 호출 하나의 상한(초). 끝나지 않는 호출을 끊는다
+  max_retries: 1              # SDK 내부 재시도. 그래프 재시도(재계획 라운드)와 별개
 
 retrieval:
   top_k: 5                    # dense 코사인 전용. RRF 상수는 R3 검색에서 읽지 않아 제거했다.
@@ -37,3 +46,37 @@ limits:
   chunk_hard_cap: 512         # 임베딩 입력 한도. 초과분은 의미 단위에서 재분할
   retrieval_round: 2          # 기술 조사 최초 1회 + 질의 보완 1회 (설계서 §8)
   validation_round: 2         # 최초 1회 + 인용 수정 1회
+
+# ── orchestrator: 담당 A ─────────────────────────────────────────────────────
+# Orchestrator-Workers 제어 상한. 값은 계획서 §8. split 은 A 가 0단계 이후 보정한다.
+orchestrator:
+  max_retry: 2                # MAX_RETRY — 재계획 라운드 (State.retry_count)
+  max_workers: 8              # MAX_WORKERS — 한 라운드의 Task·Worker 수
+  max_repairs: 2              # synthesis·report 저비용 수리 (State.repair_count)
+  max_steps: 12               # State.step_count — 정상 종료 가드
+  recursion_limit: 60         # 그래프 안전장치. langgraph 1.2.12 기본값은 10007 이라 명시한다
+  max_searches: 16            # 실행 전체 웹 검색 상한 (라운드마다 새로 주지 않는다)
+  max_judge_retries: 1
+  split:                      # 근거 가용성 사전 조사 → Task 개수 규칙 (계획서 §4-1)
+    tau: null                 # 유사도 임계값 — 보정 전 자리값
+    T: null                   # 기술별 청크 수 기준 — 보정 전 자리값
+
+# ── report: 담당 C ───────────────────────────────────────────────────────────
+# 10쪽 상한용 표시 상한 (계획서 §7-2). C 가 쪽수 실측으로 보정한다.
+report:
+  max_pages: 10
+  max_claims_per_cell: null   # 관점×기술 칸당 본문 표시 Claim 수 — 보정 전 자리값
+  max_implications: null      # §5 시사점 표시 수 — 보정 전 자리값
+  max_gaps: null              # §6 Gap 표시 수 — 보정 전 자리값
+  max_quote_chars: null       # 인용 발췌 길이 — 보정 전 자리값
+  max_compaction: 2           # 압축 단계 상한
+
+# ── quality: 담당 C ──────────────────────────────────────────────────────────
+# 품질 평가 기준 (계획서 §7-1). C 가 현재 코퍼스로 보정한 뒤 고정하고 README 에 공개한다.
+quality:
+  judge_sample: 60            # L1·L2 Judge 전수 상한. 넘으면 관점×기술 층화 결정적 표본
+  bias:
+    min_source_groups: 2      # 지표 ① 기술별 인용 근거의 출처 묶음 수
+    max_group_share: 0.6      # 지표 ② 단일 묶음 비중
+  source_groups: {}           # source_id → 묶음 이름. 논문 4편은 1저자 소속 확인 후 기입
+  exceptions: []              # 사전 정의 편향 예외 (기술·사유·조사 범위)

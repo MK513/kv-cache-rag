@@ -43,7 +43,7 @@ KV cache 최적화 기술을 소프트웨어·하드웨어 두 진영에서 선�
 ## Tech Stack
 
 - **Framework** : LangGraph
-- **LLM/Generator** : gpt-5.6-luna (fallback: gpt-4.1-mini)
+- **LLM/Generator** : gpt-4.1-mini (temperature 0, seed 고정)
 - **LLM/Judge** : 해당 없음 — 인용 검증은 LLM 채점이 아닌 인덱스 실물 대조 방식의 결정적 검사
 - **Retrieval** : FAISS dense 단일 모드 (Hit@K·MRR@K 측정 스크립트 구현, 정답 청크 라벨링
   미완으로 수치 미확정)
@@ -233,9 +233,8 @@ PDF 는 **검증을 통과했을 때만** 나온다(§8 — 무효 인용이 남
 실제로 적용된 `temperature`·`seed`·토큰 사용량은 `runs/<run_id>/run.json` 의 `llm` 에
 기록된다(설정 파일 값과 다를 수 있다 — 아래 재현성 절 참고).
 
-> ⚠️ `gpt-5.6-luna` 가 팀 계정에서 호출되는지, **`with_structured_output`(tool calling)을
-> 지원하는지** 먼저 확인할 것. 미지원이면 `synthesis` 의 구조화 출력이 무너진다.
-> 안 되면 `.env` 에 `LLM_MODEL=gpt-4.1-mini`.
+> 기본 모델은 `gpt-4.1-mini` 다. 로컬 `.env` 에 예전 `LLM_MODEL` 값이 남아 있으면 그쪽이
+> 우선하므로 지우거나 비워 둘 것.
 
 ---
 
@@ -274,8 +273,10 @@ state 로 자기 함수만 불렀기 때문이다. 그중 검증 결과가 State
 | **이해관계자 근거** | ❌ 매 실행 웹을 새로 검색한다 |
 
 측정값: 같은 코퍼스로 두 번 돌렸을 때 `maturity` 노드가 **인용 근거 5건이 완전히 같은데
-본문 유사도 0.258** 이었다. `langchain_openai` 가 `gpt-5.6-luna` 에 대해 `temperature` 를
-보내지 않고(추론형 모델로 취급) `seed` 도 무시되기 때문이다. 조사 기록은
+본문 유사도 0.258** 이었다. 당시 기본 모델이던 `gpt-5.6-luna` 에 대해 `langchain_openai` 가
+`temperature` 를 보내지 않고(추론형 모델로 취급) `seed` 도 무시되기 때문이었다. 현재 기본
+모델 `gpt-4.1-mini` 는 temperature=0·seed 가 전달되지만 OpenAI 의 seed 는 best-effort 라
+문장 동일성은 여전히 보장되지 않는다. 조사 기록은
 [docs/reproducibility-plan.md](docs/reproducibility-plan.md).
 
 **클론한 사람이 같은 결과를 얻을 수 없다.** `data/raw/`(원문)와 `.cache/`(모델 응답

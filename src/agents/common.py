@@ -4,10 +4,51 @@
 같은 모양이라 여기 한 번만 쓴다. 각 노드는 질의와 지시문만 갖는다.
 """
 
+import re
+from datetime import datetime, timezone
+
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
 from src.llm import get_llm
+from src.schema import Gap
+
+# ── 0단계 계약: 공통 함수 (코드 검토 D4~D6) ──────────────────────────────────
+# 에이전트 4개·report 에 같은 정규식·Gap 파서·trace 조립이 따로 있다. 여기에 하나로 두고,
+# 각 레인이 자기 파일의 사본을 이것으로 바꾼다(B: 에이전트, C: report, A: graph).
+# 이 파일은 0단계 이후 담당 B 소유다.
+
+CITATION_RE = re.compile(r"\[([0-9a-f]{12})\]")
+_GAP_LINE_RE = re.compile(r"근거\s*공백\s*:\s*(.+)\s*$", re.MULTILINE)
+
+
+def event(node: str, status: str = "ok", attempt: int = 1, **fields) -> dict:
+    """trace 한 줄. 노드·상태·시각·개수 같은 가벼운 값만 넣는다(본문·근거 금지)."""
+    return dict(node=node, status=status, attempt=attempt,
+                timestamp=datetime.now(timezone.utc).isoformat(), **fields)
+
+
+def gaps_from_text(text: str, role: str, reason: str, kind: str = "evidence_gap") -> list[Gap]:
+    """본문 마지막의 `근거 공백: 항목1 | 항목2` 를 Gap 으로 바꾼다.
+
+    항목에 한 기술 이름만 나오면 그 기술, 둘 다 나오거나 없으면 both 로 둔다.
+    """
+    matches = _GAP_LINE_RE.findall(text or "")
+    if not matches:
+        return []
+    payload = matches[-1].strip()
+    if payload in ("", "없음", "-", "None"):
+        return []
+    gaps = []
+    for item in (g.strip() for g in payload.split("|") if g.strip()):
+        lower = item.lower()
+        technology = "both"
+        if "turboquant" in lower and "itme" not in lower:
+            technology = "TurboQuant"
+        elif "itme" in lower and "turboquant" not in lower:
+            technology = "ITME"
+        gaps.append(Gap(role=role, technology=technology, item=item, reason=reason, kind=kind))
+    return gaps
 
 GROUND_RULES = """공통 규칙:
 - 아래 <document> 근거에 있는 내용만 쓴다. 없는 내용을 추론으로 채우지 않는다.

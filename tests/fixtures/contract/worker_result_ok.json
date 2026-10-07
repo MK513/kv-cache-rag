@@ -1,0 +1,95 @@
+{
+  "task": {
+    "task_id": "r0-market-both",
+    "perspective": "market",
+    "technologies": [
+      "TurboQuant",
+      "ITME"
+    ],
+    "focus": "두 기술의 생태계 지지와 채택 현황",
+    "queries": [
+      "TurboQuant vLLM 채택",
+      "ITME CXL 생태계"
+    ],
+    "rationale": "사전 조사에서 ITME 청크가 T 미만이라 두 기술을 한 Task 로 조사",
+    "round": 0,
+    "web_budget": 0
+  },
+  "round": 0,
+  "status": "completed",
+  "assessment": {
+    "claims": [
+      {
+        "claim_id": "r0-market-both:claim_market_turboquant_contract",
+        "text": "TurboQuant 에 대한 예시 주장 [c1c1c1c1c1c1]",
+        "technology": "TurboQuant",
+        "kind": "fact",
+        "evidence_ids": [
+          "c1c1c1c1c1c1"
+        ],
+        "explanation": "",
+        "stakeholder_group": "",
+        "actor": "",
+        "statement_date": null,
+        "context": ""
+      }
+    ],
+    "sources": [
+      {
+        "source_id": "src-market-turboquant",
+        "run_id": "contract-run",
+        "collection": "ecosystem",
+        "allowed_uses": [
+          "market"
+        ],
+        "title": "TurboQuant 예시 출처 (market)",
+        "url": "",
+        "published_at": null,
+        "retrieved_at": "",
+        "sha256": "",
+        "snapshot_path": ""
+      }
+    ],
+    "evidence": [
+      {
+        "evidence_id": "c1c1c1c1c1c1",
+        "source_id": "src-market-turboquant",
+        "run_id": "contract-run",
+        "collection": "ecosystem",
+        "quote": "TurboQuant 에 대한 예시 인용 구절",
+        "location": "page:1",
+        "allowed_uses": [
+          "market"
+        ],
+        "snapshot_path": "",
+        "sha256": ""
+      }
+    ],
+    "gaps": [
+      {
+        "role": "market",
+        "technology": "ITME",
+        "item": "ITME 상용 채택 사례",
+        "reason": "ecosystem 컬렉션에서 ITME 대상 자료를 찾지 못함",
+        "kind": "evidence_gap",
+        "attempted_queries": [
+          "ITME CXL 메모리 확장 상용 채택"
+        ],
+        "missing_info": "상용 배치 사례",
+        "impact": "ITME 시장성은 공개 정보 기반 미확인으로 남는다"
+      }
+    ],
+    "status": "completed"
+  },
+  "error_kind": "",
+  "error": "",
+  "meta": {
+    "attempted_queries": [
+      "TurboQuant vLLM 채택",
+      "ITME CXL 생태계"
+    ],
+    "retrieved": 4,
+    "web_searches_used": 0
+  },
+  "result_path": "runs/contract-run/workers/r0-market-both.json"
+}

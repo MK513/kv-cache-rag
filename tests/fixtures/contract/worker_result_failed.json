@@ -1,0 +1,28 @@
+{
+  "task": {
+    "task_id": "r0-stakeholder-both",
+    "perspective": "stakeholder",
+    "technologies": [
+      "TurboQuant",
+      "ITME"
+    ],
+    "focus": "4주체 반응",
+    "queries": [
+      "TurboQuant 개발자 반응"
+    ],
+    "rationale": "",
+    "round": 0,
+    "web_budget": 16
+  },
+  "round": 0,
+  "status": "failed",
+  "assessment": null,
+  "error_kind": "transient",
+  "error": "TimeoutError: web search timed out",
+  "meta": {
+    "attempted_queries": [],
+    "retrieved": 0,
+    "web_searches_used": 0
+  },
+  "result_path": "runs/contract-run/workers/r0-stakeholder-both.json"
+}

@@ -1,0 +1,966 @@
+{
+  "run_id": "contract-run",
+  "run_config": {
+    "domain": "데이터센터/클라우드",
+    "technologies": [
+      "TurboQuant",
+      "ITME"
+    ],
+    "runs_dir": "runs"
+  },
+  "plan": [
+    {
+      "task_id": "r0-market-both",
+      "perspective": "market",
+      "technologies": [
+        "TurboQuant",
+        "ITME"
+      ],
+      "focus": "두 기술의 생태계 지지와 채택 현황",
+      "queries": [
+        "TurboQuant vLLM 채택",
+        "ITME CXL 생태계"
+      ],
+      "rationale": "사전 조사에서 ITME 청크가 T 미만이라 두 기술을 한 Task 로 조사",
+      "round": 0,
+      "web_budget": 0
+    },
+    {
+      "task_id": "r0-stakeholder-both",
+      "perspective": "stakeholder",
+      "technologies": [
+        "TurboQuant",
+        "ITME"
+      ],
+      "focus": "4주체 반응",
+      "queries": [
+        "TurboQuant 개발자 반응"
+      ],
+      "rationale": "",
+      "round": 0,
+      "web_budget": 16
+    }
+  ],
+  "retry_count": 0,
+  "step_count": 1,
+  "research": {
+    "claims": [
+      {
+        "claim_id": "claim_research_turboquant_contract",
+        "text": "TurboQuant 에 대한 예시 주장 [a1a1a1a1a1a1]",
+        "technology": "TurboQuant",
+        "kind": "fact",
+        "evidence_ids": [
+          "a1a1a1a1a1a1"
+        ],
+        "explanation": "",
+        "stakeholder_group": "",
+        "actor": "",
+        "statement_date": null,
+        "context": ""
+      },
+      {
+        "claim_id": "claim_research_itme_contract",
+        "text": "ITME 에 대한 예시 주장 [a2a2a2a2a2a2]",
+        "technology": "ITME",
+        "kind": "fact",
+        "evidence_ids": [
+          "a2a2a2a2a2a2"
+        ],
+        "explanation": "",
+        "stakeholder_group": "",
+        "actor": "",
+        "statement_date": null,
+        "context": ""
+      }
+    ],
+    "sources": [
+      {
+        "source_id": "src-research-turboquant",
+        "run_id": "contract-run",
+        "collection": "papers_core",
+        "allowed_uses": [
+          "research"
+        ],
+        "title": "TurboQuant 예시 출처 (research)",
+        "url": "",
+        "published_at": null,
+        "retrieved_at": "",
+        "sha256": "",
+        "snapshot_path": ""
+      },
+      {
+        "source_id": "src-research-itme",
+        "run_id": "contract-run",
+        "collection": "papers_core",
+        "allowed_uses": [
+          "research"
+        ],
+        "title": "ITME 예시 출처 (research)",
+        "url": "",
+        "published_at": null,
+        "retrieved_at": "",
+        "sha256": "",
+        "snapshot_path": ""
+      }
+    ],
+    "evidence": [
+      {
+        "evidence_id": "a1a1a1a1a1a1",
+        "source_id": "src-research-turboquant",
+        "run_id": "contract-run",
+        "collection": "papers_core",
+        "quote": "TurboQuant 에 대한 예시 인용 구절",
+        "location": "page:1",
+        "allowed_uses": [
+          "research"
+        ],
+        "snapshot_path": "",
+        "sha256": ""
+      },
+      {
+        "evidence_id": "a2a2a2a2a2a2",
+        "source_id": "src-research-itme",
+        "run_id": "contract-run",
+        "collection": "papers_core",
+        "quote": "ITME 에 대한 예시 인용 구절",
+        "location": "page:1",
+        "allowed_uses": [
+          "research"
+        ],
+        "snapshot_path": "",
+        "sha256": ""
+      }
+    ],
+    "gaps": [],
+    "status": "completed"
+  },
+  "maturity": {
+    "claims": [
+      {
+        "claim_id": "r0-maturity-both:claim_maturity_turboquant_contract",
+        "text": "TurboQuant 에 대한 예시 주장 [b1b1b1b1b1b1]",
+        "technology": "TurboQuant",
+        "kind": "fact",
+        "evidence_ids": [
+          "b1b1b1b1b1b1"
+        ],
+        "explanation": "",
+        "stakeholder_group": "",
+        "actor": "",
+        "statement_date": null,
+        "context": ""
+      },
+      {
+        "claim_id": "r0-maturity-both:claim_maturity_itme_contract",
+        "text": "ITME 에 대한 예시 주장 [b2b2b2b2b2b2]",
+        "technology": "ITME",
+        "kind": "fact",
+        "evidence_ids": [
+          "b2b2b2b2b2b2"
+        ],
+        "explanation": "",
+        "stakeholder_group": "",
+        "actor": "",
+        "statement_date": null,
+        "context": ""
+      }
+    ],
+    "sources": [
+      {
+        "source_id": "src-maturity-turboquant",
+        "run_id": "contract-run",
+        "collection": "papers_core",
+        "allowed_uses": [
+          "maturity"
+        ],
+        "title": "TurboQuant 예시 출처 (maturity)",
+        "url": "",
+        "published_at": null,
+        "retrieved_at": "",
+        "sha256": "",
+        "snapshot_path": ""
+      },
+      {
+        "source_id": "src-maturity-itme",
+        "run_id": "contract-run",
+        "collection": "papers_core",
+        "allowed_uses": [
+          "maturity"
+        ],
+        "title": "ITME 예시 출처 (maturity)",
+        "url": "",
+        "published_at": null,
+        "retrieved_at": "",
+        "sha256": "",
+        "snapshot_path": ""
+      }
+    ],
+    "evidence": [
+      {
+        "evidence_id": "b1b1b1b1b1b1",
+        "source_id": "src-maturity-turboquant",
+        "run_id": "contract-run",
+        "collection": "papers_core",
+        "quote": "TurboQuant 에 대한 예시 인용 구절",
+        "location": "page:1",
+        "allowed_uses": [
+          "maturity"
+        ],
+        "snapshot_path": "",
+        "sha256": ""
+      },
+      {
+        "evidence_id": "b2b2b2b2b2b2",
+        "source_id": "src-maturity-itme",
+        "run_id": "contract-run",
+        "collection": "papers_core",
+        "quote": "ITME 에 대한 예시 인용 구절",
+        "location": "page:1",
+        "allowed_uses": [
+          "maturity"
+        ],
+        "snapshot_path": "",
+        "sha256": ""
+      }
+    ],
+    "gaps": [],
+    "status": "completed"
+  },
+  "market": {
+    "claims": [
+      {
+        "claim_id": "r0-market-both:claim_market_turboquant_contract",
+        "text": "TurboQuant 에 대한 예시 주장 [c1c1c1c1c1c1]",
+        "technology": "TurboQuant",
+        "kind": "fact",
+        "evidence_ids": [
+          "c1c1c1c1c1c1"
+        ],
+        "explanation": "",
+        "stakeholder_group": "",
+        "actor": "",
+        "statement_date": null,
+        "context": ""
+      }
+    ],
+    "sources": [
+      {
+        "source_id": "src-market-turboquant",
+        "run_id": "contract-run",
+        "collection": "ecosystem",
+        "allowed_uses": [
+          "market"
+        ],
+        "title": "TurboQuant 예시 출처 (market)",
+        "url": "",
+        "published_at": null,
+        "retrieved_at": "",
+        "sha256": "",
+        "snapshot_path": ""
+      }
+    ],
+    "evidence": [
+      {
+        "evidence_id": "c1c1c1c1c1c1",
+        "source_id": "src-market-turboquant",
+        "run_id": "contract-run",
+        "collection": "ecosystem",
+        "quote": "TurboQuant 에 대한 예시 인용 구절",
+        "location": "page:1",
+        "allowed_uses": [
+          "market"
+        ],
+        "snapshot_path": "",
+        "sha256": ""
+      }
+    ],
+    "gaps": [
+      {
+        "role": "market",
+        "technology": "ITME",
+        "item": "ITME 상용 채택 사례",
+        "reason": "ecosystem 컬렉션에서 ITME 대상 자료를 찾지 못함",
+        "kind": "evidence_gap",
+        "attempted_queries": [
+          "ITME CXL 메모리 확장 상용 채택"
+        ],
+        "missing_info": "상용 배치 사례",
+        "impact": "ITME 시장성은 공개 정보 기반 미확인으로 남는다"
+      }
+    ],
+    "status": "completed"
+  },
+  "stakeholder": {
+    "claims": [
+      {
+        "claim_id": "r1-stakeholder-both:claim_stakeholder_turboquant_contract",
+        "text": "TurboQuant 에 대한 예시 주장 [d1d1d1d1d1d1]",
+        "technology": "TurboQuant",
+        "kind": "fact",
+        "evidence_ids": [
+          "d1d1d1d1d1d1"
+        ],
+        "explanation": "",
+        "stakeholder_group": "",
+        "actor": "",
+        "statement_date": null,
+        "context": ""
+      },
+      {
+        "claim_id": "r1-stakeholder-both:claim_stakeholder_itme_contract",
+        "text": "ITME 에 대한 예시 주장 [d2d2d2d2d2d2]",
+        "technology": "ITME",
+        "kind": "fact",
+        "evidence_ids": [
+          "d2d2d2d2d2d2"
+        ],
+        "explanation": "",
+        "stakeholder_group": "",
+        "actor": "",
+        "statement_date": null,
+        "context": ""
+      }
+    ],
+    "sources": [
+      {
+        "source_id": "src-stakeholder-turboquant",
+        "run_id": "contract-run",
+        "collection": "web",
+        "allowed_uses": [
+          "stakeholder"
+        ],
+        "title": "TurboQuant 예시 출처 (stakeholder)",
+        "url": "",
+        "published_at": null,
+        "retrieved_at": "",
+        "sha256": "",
+        "snapshot_path": ""
+      },
+      {
+        "source_id": "src-stakeholder-itme",
+        "run_id": "contract-run",
+        "collection": "web",
+        "allowed_uses": [
+          "stakeholder"
+        ],
+        "title": "ITME 예시 출처 (stakeholder)",
+        "url": "",
+        "published_at": null,
+        "retrieved_at": "",
+        "sha256": "",
+        "snapshot_path": ""
+      }
+    ],
+    "evidence": [
+      {
+        "evidence_id": "d1d1d1d1d1d1",
+        "source_id": "src-stakeholder-turboquant",
+        "run_id": "contract-run",
+        "collection": "web",
+        "quote": "TurboQuant 에 대한 예시 인용 구절",
+        "location": "page:1",
+        "allowed_uses": [
+          "stakeholder"
+        ],
+        "snapshot_path": "",
+        "sha256": ""
+      },
+      {
+        "evidence_id": "d2d2d2d2d2d2",
+        "source_id": "src-stakeholder-itme",
+        "run_id": "contract-run",
+        "collection": "web",
+        "quote": "ITME 에 대한 예시 인용 구절",
+        "location": "page:1",
+        "allowed_uses": [
+          "stakeholder"
+        ],
+        "snapshot_path": "",
+        "sha256": ""
+      }
+    ],
+    "gaps": [],
+    "status": "completed"
+  },
+  "domain_assessment": {
+    "claims": [
+      {
+        "claim_id": "r0-domain_assessment-both:claim_domain_turboquant_contract",
+        "text": "TurboQuant 에 대한 예시 주장 [e1e1e1e1e1e1]",
+        "technology": "TurboQuant",
+        "kind": "fact",
+        "evidence_ids": [
+          "e1e1e1e1e1e1"
+        ],
+        "explanation": "",
+        "stakeholder_group": "",
+        "actor": "",
+        "statement_date": null,
+        "context": ""
+      },
+      {
+        "claim_id": "r0-domain_assessment-both:claim_domain_itme_contract",
+        "text": "ITME 에 대한 예시 주장 [e2e2e2e2e2e2]",
+        "technology": "ITME",
+        "kind": "fact",
+        "evidence_ids": [
+          "e2e2e2e2e2e2"
+        ],
+        "explanation": "",
+        "stakeholder_group": "",
+        "actor": "",
+        "statement_date": null,
+        "context": ""
+      }
+    ],
+    "sources": [
+      {
+        "source_id": "src-domain_assessment-turboquant",
+        "run_id": "contract-run",
+        "collection": "context",
+        "allowed_uses": [
+          "domain"
+        ],
+        "title": "TurboQuant 예시 출처 (domain_assessment)",
+        "url": "",
+        "published_at": null,
+        "retrieved_at": "",
+        "sha256": "",
+        "snapshot_path": ""
+      },
+      {
+        "source_id": "src-domain_assessment-itme",
+        "run_id": "contract-run",
+        "collection": "context",
+        "allowed_uses": [
+          "domain"
+        ],
+        "title": "ITME 예시 출처 (domain_assessment)",
+        "url": "",
+        "published_at": null,
+        "retrieved_at": "",
+        "sha256": "",
+        "snapshot_path": ""
+      }
+    ],
+    "evidence": [
+      {
+        "evidence_id": "e1e1e1e1e1e1",
+        "source_id": "src-domain_assessment-turboquant",
+        "run_id": "contract-run",
+        "collection": "context",
+        "quote": "TurboQuant 에 대한 예시 인용 구절",
+        "location": "page:1",
+        "allowed_uses": [
+          "domain"
+        ],
+        "snapshot_path": "",
+        "sha256": ""
+      },
+      {
+        "evidence_id": "e2e2e2e2e2e2",
+        "source_id": "src-domain_assessment-itme",
+        "run_id": "contract-run",
+        "collection": "context",
+        "quote": "ITME 에 대한 예시 인용 구절",
+        "location": "page:1",
+        "allowed_uses": [
+          "domain"
+        ],
+        "snapshot_path": "",
+        "sha256": ""
+      }
+    ],
+    "gaps": [],
+    "status": "completed"
+  },
+  "worker_results": [
+    {
+      "task": {
+        "task_id": "r0-market-both",
+        "perspective": "market",
+        "technologies": [
+          "TurboQuant",
+          "ITME"
+        ],
+        "focus": "두 기술의 생태계 지지와 채택 현황",
+        "queries": [
+          "TurboQuant vLLM 채택",
+          "ITME CXL 생태계"
+        ],
+        "rationale": "사전 조사에서 ITME 청크가 T 미만이라 두 기술을 한 Task 로 조사",
+        "round": 0,
+        "web_budget": 0
+      },
+      "round": 0,
+      "status": "completed",
+      "assessment": {
+        "claims": [
+          {
+            "claim_id": "r0-market-both:claim_market_turboquant_contract",
+            "text": "TurboQuant 에 대한 예시 주장 [c1c1c1c1c1c1]",
+            "technology": "TurboQuant",
+            "kind": "fact",
+            "evidence_ids": [
+              "c1c1c1c1c1c1"
+            ],
+            "explanation": "",
+            "stakeholder_group": "",
+            "actor": "",
+            "statement_date": null,
+            "context": ""
+          }
+        ],
+        "sources": [
+          {
+            "source_id": "src-market-turboquant",
+            "run_id": "contract-run",
+            "collection": "ecosystem",
+            "allowed_uses": [
+              "market"
+            ],
+            "title": "TurboQuant 예시 출처 (market)",
+            "url": "",
+            "published_at": null,
+            "retrieved_at": "",
+            "sha256": "",
+            "snapshot_path": ""
+          }
+        ],
+        "evidence": [
+          {
+            "evidence_id": "c1c1c1c1c1c1",
+            "source_id": "src-market-turboquant",
+            "run_id": "contract-run",
+            "collection": "ecosystem",
+            "quote": "TurboQuant 에 대한 예시 인용 구절",
+            "location": "page:1",
+            "allowed_uses": [
+              "market"
+            ],
+            "snapshot_path": "",
+            "sha256": ""
+          }
+        ],
+        "gaps": [
+          {
+            "role": "market",
+            "technology": "ITME",
+            "item": "ITME 상용 채택 사례",
+            "reason": "ecosystem 컬렉션에서 ITME 대상 자료를 찾지 못함",
+            "kind": "evidence_gap",
+            "attempted_queries": [
+              "ITME CXL 메모리 확장 상용 채택"
+            ],
+            "missing_info": "상용 배치 사례",
+            "impact": "ITME 시장성은 공개 정보 기반 미확인으로 남는다"
+          }
+        ],
+        "status": "completed"
+      },
+      "error_kind": "",
+      "error": "",
+      "meta": {
+        "attempted_queries": [
+          "TurboQuant vLLM 채택",
+          "ITME CXL 생태계"
+        ],
+        "retrieved": 4,
+        "web_searches_used": 0
+      },
+      "result_path": "runs/contract-run/workers/r0-market-both.json"
+    },
+    {
+      "task": {
+        "task_id": "r0-stakeholder-both",
+        "perspective": "stakeholder",
+        "technologies": [
+          "TurboQuant",
+          "ITME"
+        ],
+        "focus": "4주체 반응",
+        "queries": [
+          "TurboQuant 개발자 반응"
+        ],
+        "rationale": "",
+        "round": 0,
+        "web_budget": 16
+      },
+      "round": 0,
+      "status": "failed",
+      "assessment": null,
+      "error_kind": "transient",
+      "error": "TimeoutError: web search timed out",
+      "meta": {
+        "attempted_queries": [],
+        "retrieved": 0,
+        "web_searches_used": 0
+      },
+      "result_path": "runs/contract-run/workers/r0-stakeholder-both.json"
+    }
+  ],
+  "gaps": [
+    {
+      "role": "market",
+      "technology": "ITME",
+      "item": "ITME 상용 채택 사례",
+      "reason": "ecosystem 컬렉션에서 ITME 대상 자료를 찾지 못함",
+      "kind": "evidence_gap",
+      "attempted_queries": [
+        "ITME CXL 메모리 확장 상용 채택"
+      ],
+      "missing_info": "상용 배치 사례",
+      "impact": "ITME 시장성은 공개 정보 기반 미확인으로 남는다"
+    }
+  ],
+  "claim_flags": {},
+  "last_error": "",
+  "source_registry": {
+    "src-research-turboquant": {
+      "source_id": "src-research-turboquant",
+      "run_id": "contract-run",
+      "collection": "papers_core",
+      "allowed_uses": [
+        "research"
+      ],
+      "title": "TurboQuant 예시 출처 (research)",
+      "url": "",
+      "published_at": null,
+      "retrieved_at": "",
+      "sha256": "",
+      "snapshot_path": ""
+    },
+    "src-research-itme": {
+      "source_id": "src-research-itme",
+      "run_id": "contract-run",
+      "collection": "papers_core",
+      "allowed_uses": [
+        "research"
+      ],
+      "title": "ITME 예시 출처 (research)",
+      "url": "",
+      "published_at": null,
+      "retrieved_at": "",
+      "sha256": "",
+      "snapshot_path": ""
+    },
+    "src-maturity-turboquant": {
+      "source_id": "src-maturity-turboquant",
+      "run_id": "contract-run",
+      "collection": "papers_core",
+      "allowed_uses": [
+        "maturity"
+      ],
+      "title": "TurboQuant 예시 출처 (maturity)",
+      "url": "",
+      "published_at": null,
+      "retrieved_at": "",
+      "sha256": "",
+      "snapshot_path": ""
+    },
+    "src-maturity-itme": {
+      "source_id": "src-maturity-itme",
+      "run_id": "contract-run",
+      "collection": "papers_core",
+      "allowed_uses": [
+        "maturity"
+      ],
+      "title": "ITME 예시 출처 (maturity)",
+      "url": "",
+      "published_at": null,
+      "retrieved_at": "",
+      "sha256": "",
+      "snapshot_path": ""
+    },
+    "src-market-turboquant": {
+      "source_id": "src-market-turboquant",
+      "run_id": "contract-run",
+      "collection": "ecosystem",
+      "allowed_uses": [
+        "market"
+      ],
+      "title": "TurboQuant 예시 출처 (market)",
+      "url": "",
+      "published_at": null,
+      "retrieved_at": "",
+      "sha256": "",
+      "snapshot_path": ""
+    },
+    "src-stakeholder-turboquant": {
+      "source_id": "src-stakeholder-turboquant",
+      "run_id": "contract-run",
+      "collection": "web",
+      "allowed_uses": [
+        "stakeholder"
+      ],
+      "title": "TurboQuant 예시 출처 (stakeholder)",
+      "url": "",
+      "published_at": null,
+      "retrieved_at": "",
+      "sha256": "",
+      "snapshot_path": ""
+    },
+    "src-stakeholder-itme": {
+      "source_id": "src-stakeholder-itme",
+      "run_id": "contract-run",
+      "collection": "web",
+      "allowed_uses": [
+        "stakeholder"
+      ],
+      "title": "ITME 예시 출처 (stakeholder)",
+      "url": "",
+      "published_at": null,
+      "retrieved_at": "",
+      "sha256": "",
+      "snapshot_path": ""
+    },
+    "src-domain_assessment-turboquant": {
+      "source_id": "src-domain_assessment-turboquant",
+      "run_id": "contract-run",
+      "collection": "context",
+      "allowed_uses": [
+        "domain"
+      ],
+      "title": "TurboQuant 예시 출처 (domain_assessment)",
+      "url": "",
+      "published_at": null,
+      "retrieved_at": "",
+      "sha256": "",
+      "snapshot_path": ""
+    },
+    "src-domain_assessment-itme": {
+      "source_id": "src-domain_assessment-itme",
+      "run_id": "contract-run",
+      "collection": "context",
+      "allowed_uses": [
+        "domain"
+      ],
+      "title": "ITME 예시 출처 (domain_assessment)",
+      "url": "",
+      "published_at": null,
+      "retrieved_at": "",
+      "sha256": "",
+      "snapshot_path": ""
+    }
+  },
+  "evidence_registry": {
+    "a1a1a1a1a1a1": {
+      "evidence_id": "a1a1a1a1a1a1",
+      "source_id": "src-research-turboquant",
+      "run_id": "contract-run",
+      "collection": "papers_core",
+      "quote": "TurboQuant 에 대한 예시 인용 구절",
+      "location": "page:1",
+      "allowed_uses": [
+        "research"
+      ],
+      "snapshot_path": "",
+      "sha256": ""
+    },
+    "a2a2a2a2a2a2": {
+      "evidence_id": "a2a2a2a2a2a2",
+      "source_id": "src-research-itme",
+      "run_id": "contract-run",
+      "collection": "papers_core",
+      "quote": "ITME 에 대한 예시 인용 구절",
+      "location": "page:1",
+      "allowed_uses": [
+        "research"
+      ],
+      "snapshot_path": "",
+      "sha256": ""
+    },
+    "b1b1b1b1b1b1": {
+      "evidence_id": "b1b1b1b1b1b1",
+      "source_id": "src-maturity-turboquant",
+      "run_id": "contract-run",
+      "collection": "papers_core",
+      "quote": "TurboQuant 에 대한 예시 인용 구절",
+      "location": "page:1",
+      "allowed_uses": [
+        "maturity"
+      ],
+      "snapshot_path": "",
+      "sha256": ""
+    },
+    "b2b2b2b2b2b2": {
+      "evidence_id": "b2b2b2b2b2b2",
+      "source_id": "src-maturity-itme",
+      "run_id": "contract-run",
+      "collection": "papers_core",
+      "quote": "ITME 에 대한 예시 인용 구절",
+      "location": "page:1",
+      "allowed_uses": [
+        "maturity"
+      ],
+      "snapshot_path": "",
+      "sha256": ""
+    },
+    "c1c1c1c1c1c1": {
+      "evidence_id": "c1c1c1c1c1c1",
+      "source_id": "src-market-turboquant",
+      "run_id": "contract-run",
+      "collection": "ecosystem",
+      "quote": "TurboQuant 에 대한 예시 인용 구절",
+      "location": "page:1",
+      "allowed_uses": [
+        "market"
+      ],
+      "snapshot_path": "",
+      "sha256": ""
+    },
+    "d1d1d1d1d1d1": {
+      "evidence_id": "d1d1d1d1d1d1",
+      "source_id": "src-stakeholder-turboquant",
+      "run_id": "contract-run",
+      "collection": "web",
+      "quote": "TurboQuant 에 대한 예시 인용 구절",
+      "location": "page:1",
+      "allowed_uses": [
+        "stakeholder"
+      ],
+      "snapshot_path": "",
+      "sha256": ""
+    },
+    "d2d2d2d2d2d2": {
+      "evidence_id": "d2d2d2d2d2d2",
+      "source_id": "src-stakeholder-itme",
+      "run_id": "contract-run",
+      "collection": "web",
+      "quote": "ITME 에 대한 예시 인용 구절",
+      "location": "page:1",
+      "allowed_uses": [
+        "stakeholder"
+      ],
+      "snapshot_path": "",
+      "sha256": ""
+    },
+    "e1e1e1e1e1e1": {
+      "evidence_id": "e1e1e1e1e1e1",
+      "source_id": "src-domain_assessment-turboquant",
+      "run_id": "contract-run",
+      "collection": "context",
+      "quote": "TurboQuant 에 대한 예시 인용 구절",
+      "location": "page:1",
+      "allowed_uses": [
+        "domain"
+      ],
+      "snapshot_path": "",
+      "sha256": ""
+    },
+    "e2e2e2e2e2e2": {
+      "evidence_id": "e2e2e2e2e2e2",
+      "source_id": "src-domain_assessment-itme",
+      "run_id": "contract-run",
+      "collection": "context",
+      "quote": "ITME 에 대한 예시 인용 구절",
+      "location": "page:1",
+      "allowed_uses": [
+        "domain"
+      ],
+      "snapshot_path": "",
+      "sha256": ""
+    }
+  },
+  "synthesis": {
+    "agreements": [
+      {
+        "text": "두 기술 모두 KV cache 메모리 병목을 다룬다",
+        "claim_ids": [
+          "r0-maturity-both:claim_maturity_turboquant_contract",
+          "r0-maturity-both:claim_maturity_itme_contract"
+        ]
+      }
+    ],
+    "conflicts": [
+      {
+        "perspective": "시장성",
+        "why": "ITME 는 상용 채택 근거가 확인되지 않았다",
+        "claim_ids": [
+          "r0-market-both:claim_market_turboquant_contract"
+        ]
+      }
+    ],
+    "gaps": [
+      "ITME 상용 채택 사례"
+    ],
+    "combination_hypothesis": "결합 효과는 공개 실측이 없어 가설이다",
+    "synthesis_version": 1,
+    "round": 0
+  },
+  "report": "# 예시 보고서\n\n## SUMMARY\n...\n\n## REFERENCE\n...",
+  "report_manifest": {
+    "report_version": 1,
+    "based_on_synthesis_version": 1,
+    "sections": {
+      "SUMMARY": [
+        "r0-maturity-both:claim_maturity_turboquant_contract",
+        "r0-maturity-both:claim_maturity_itme_contract"
+      ],
+      "4. 관점별 평가 — 시장성": [
+        "r0-market-both:claim_market_turboquant_contract"
+      ]
+    },
+    "gaps": [
+      {
+        "perspective": "market",
+        "technology": "ITME",
+        "kind": "evidence_gap",
+        "item": "ITME 상용 채택 사례"
+      }
+    ],
+    "cited_evidence_ids": [
+      "a1a1a1a1a1a1",
+      "a2a2a2a2a2a2",
+      "b1b1b1b1b1b1",
+      "b2b2b2b2b2b2",
+      "c1c1c1c1c1c1",
+      "d1d1d1d1d1d1",
+      "d2d2d2d2d2d2",
+      "e1e1e1e1e1e1",
+      "e2e2e2e2e2e2"
+    ],
+    "references": [
+      "src-domain_assessment-itme",
+      "src-domain_assessment-turboquant",
+      "src-market-turboquant",
+      "src-maturity-itme",
+      "src-maturity-turboquant",
+      "src-research-itme",
+      "src-research-turboquant",
+      "src-stakeholder-itme",
+      "src-stakeholder-turboquant"
+    ],
+    "disclosed_exceptions": [],
+    "compaction": 0,
+    "partial": false
+  },
+  "report_version": 1,
+  "quality_eval": {
+    "passed": false,
+    "next": "orchestrator",
+    "verdicts": {
+      "coverage": {
+        "status": "fail",
+        "reasons": [
+          "stakeholder:ITME 는 execution_gap"
+        ],
+        "target_cells": [
+          "stakeholder:ITME"
+        ]
+      },
+      "groundedness_l1": {
+        "status": "pass",
+        "reasons": [],
+        "target_cells": []
+      }
+    },
+    "evaluated_report_version": 1,
+    "pdf_path": "",
+    "pdf_sha256": "",
+    "scope": {
+      "l1": "9/9"
+    }
+  }
+}

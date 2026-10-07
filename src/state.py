@@ -48,6 +48,32 @@ class ReportState(TypedDict, total=False):
     # ── 누적 ──
     trace: Annotated[list[dict], operator.add]
 
+    # ══ Orchestrator-Workers 계약 (계획서 §6) ══════════════════════════════════
+    # 0단계 계약 커밋에서 필드만 정의한다. 위의 기존 필드(validation·review_status 등)는
+    # 각 레인이 새 흐름으로 옮긴 뒤 정리한다.
+    #
+    # 쓰기 담당 (계획서 §6-1). 병렬로 실행되는 것은 worker 뿐이고, worker 는
+    # worker_results·trace 에만 쓴다(둘 다 operator.add).
+
+    # ── 제어: 계획·라우팅·종료·재개에 필요한 최소치 ──
+    plan: Annotated[list[dict], "현재 라운드 Task 목록 (schema.Task). orchestrator"]
+    retry_count: Annotated[int, "재계획 라운드 수 = 다음 Task 의 round. 상한 orchestrator.max_retry. orchestrator"]
+    repair_count: Annotated[int, "synthesis·report 저비용 수리 횟수. 상한 orchestrator.max_repairs. quality_eval"]
+    step_count: Annotated[int, "orchestrator·quality_eval 결정마다 +1. 상한 orchestrator.max_steps"]
+    claim_flags: Annotated[dict, "{claim_id: {status: invalid|recheck, reason, by, at_report_version}}. quality_eval·apply_review"]
+    last_decision: Annotated[dict, "최근 결정·사유 요약. 전문은 runs/<run_id>/decisions.jsonl"]
+    last_error: Annotated[str, "가장 최근 실패 요약 (Worker 실패·Judge 실패·정합성 오류). collect_evidence"]
+    stop_reason: Annotated[str, "정상 통과면 빈 값. 상한 도달·Judge 실패 등"]
+
+    # ── Send 입력 전용 ──
+    task: Annotated[dict, "Send(\"worker\", state | {\"task\": t}) 로 worker 에만 전달. 그래프 노드는 이 키를 반환하지 않는다"]
+
+    # ── 페이로드: 작업 결과 ──
+    worker_results: Annotated[list[dict], operator.add]   # schema.WorkerResult 누적. worker
+    report_manifest: Annotated[dict, "schema.ReportManifest — 보고서에 실제로 표시된 것. report"]
+    report_version: Annotated[int, "report 노드만 올린다"]
+    quality_eval: Annotated[dict, "schema.QualityEval. quality_eval"]
+
 
 def run_dir(state) -> Path:
     """실행 저장 루트 `runs/<run_id>/`. R3 의 웹 스냅샷도 이 아래에 쌓인다.

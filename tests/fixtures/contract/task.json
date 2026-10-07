@@ -1,0 +1,16 @@
+{
+  "task_id": "r0-market-both",
+  "perspective": "market",
+  "technologies": [
+    "TurboQuant",
+    "ITME"
+  ],
+  "focus": "두 기술의 생태계 지지와 채택 현황",
+  "queries": [
+    "TurboQuant vLLM 채택",
+    "ITME CXL 생태계"
+  ],
+  "rationale": "사전 조사에서 ITME 청크가 T 미만이라 두 기술을 한 Task 로 조사",
+  "round": 0,
+  "web_budget": 0
+}

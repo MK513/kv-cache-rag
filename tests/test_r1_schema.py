@@ -21,7 +21,15 @@ def load(name):
 
 def test_r3_assessment_round_trips_unchanged():
     raw = load("runs/r3-smoke/stakeholder.json")
-    assert Assessment.model_validate(raw).model_dump() == raw
+    # Orchestrator-Workers 계약이 Gap 에 더한 필드(kind 등)는 기본값으로 채워진다.
+    # 그 밖의 값은 하나도 바뀌지 않아야 한다.
+    expected = json.loads(json.dumps(raw))
+    for gap in expected["gaps"]:
+        gap.setdefault("kind", "evidence_gap")
+        gap.setdefault("attempted_queries", [])
+        gap.setdefault("missing_info", "")
+        gap.setdefault("impact", "")
+    assert Assessment.model_validate(raw).model_dump() == expected
 
 
 def test_r3_failed_assessment_validates():
