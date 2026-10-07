@@ -21,6 +21,8 @@ from src.settings import settings
 
 CITATION_RE = re.compile(r"\[([0-9a-f]{12})\]")
 _GAP_LINE_RE = re.compile(r"근거\s*공백\s*:\s*(.+)\s*$", re.MULTILINE)
+# 모델 출력에 섞여 드는 키릴 문자·한자("…세부 실험표 стой", 20261007-171655 실행). 한국어 보고서에는 쓰지 않는다.
+_FOREIGN_RE = re.compile(r"[\u0400-\u04FF\u4E00-\u9FFF]+")
 # 모델이 `[ id ]`·`[id, id]`·`[id; id]` 로도 인용한다. CITATION_RE 가 이를 놓치면 인용 0건이 되어
 # 근거가 있는 응답 전체가 failed 로 버려진다(20261007 실행의 maturity·TurboQuant).
 _LOOSE_CITATION_RE = re.compile(r"\[\s*([0-9a-f]{12}(?:\s*[,;]\s*[0-9a-f]{12})*)\s*\]")
@@ -70,7 +72,9 @@ def gaps_from_text(text: str, role: str, reason: str, kind: str = "evidence_gap"
     if payload in ("", "없음", "-", "None"):
         return []
     gaps = []
-    for item in (g.strip() for g in payload.split("|") if g.strip()):
+    for item in (_FOREIGN_RE.sub("", g).strip() for g in payload.split("|")):
+        if not item:
+            continue
         lower = item.lower()
         technology = "both"
         if "turboquant" in lower and "itme" not in lower:
@@ -175,6 +179,8 @@ GROUND_RULES = """공통 규칙:
 - 특정 기술을 승자로 선정하거나 우열을 판정하지 않는다.
 - 서로 다른 실험의 수치를 직접 비교하지 않는다. 비교 대상과 실험 조건을 함께 적는다.
 - 성능 향상뿐 아니라 잔여 비용(정확도 손실, 전송 지연, 시스템 복잡도)도 함께 보고한다.
+- 이 지시문의 규칙·가드레일 문장을 본문에 옮겨 쓰지 않는다. 규칙은 지키되 "…한 경우에 해당하므로 …로 남긴다" 같은 설명을 붙이지 않는다.
+- "제공된 청크·문서·인용문" 같은 표현을 쓰지 않는다. 출처 이름으로 쓴다. 예: "TurboQuant 논문은 …", "SK hynix 뉴스룸은 …"
 
 마지막 줄은 반드시 다음 형식으로 끝낸다:
 근거 공백: 항목1 | 항목2      (없으면 "근거 공백: 없음")"""

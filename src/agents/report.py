@@ -46,8 +46,10 @@ GAP_KIND_LABEL = {"evidence_gap": "근거 없음", "execution_gap": "조사 실�
 CRITERION_LABEL = {"groundedness_l1": "근거 연결(L1)", "groundedness_l2": "종합 근거(L2)",
                    "neutrality": "중립성", "bias": "편향 통제", "coverage": "관점 커버리지",
                    "structure": "구조·분량"}
-# item 이 이미 대상 기술을 말하고 있으면 접두어를 붙이지 않는다. LLM 이 쓴 문장이라
-# "양 기술" · "두 기술" · 기술명 나열 등 표현이 갈린다.
+TECH_ORDER = {tech: i for i, tech in enumerate([*TECHS, "both"])}
+# 근거가 없다고만 말하는 Claim. 칸마다 몇 건만 싣는 압축 단계에서 이런 Claim 이 먼저 뽑혀
+# §4.3 이 "발언이 없다" 한 문장이 됐다(20261007-171655 실행). ponytail: 키워드 휴리스틱
+ABSENCE_RE = re.compile(r"확인되지 않|확인할 수 없|미확인|없다|않았다")
 
 
 def _number_citations(markdown: str, marks: dict) -> str:
@@ -108,11 +110,23 @@ def _next_compaction(state: dict) -> int:
 
 
 def _clip(text: str, limit: int) -> str:
-    """Claim 본문을 표시 길이로 자른다. 잘린 부분의 인용 ID 는 끝에 다시 붙여 근거를 잃지 않는다."""
+    """Claim 본문을 표시 길이로 자른다. 잘린 부분의 인용 ID 는 끝에 다시 붙여 근거를 잃지 않는다.
+
+    글자 수로 바로 자르면 "T…", "[cefcd… 처럼 단어·인용 ID 중간에서 끊겼다(20261007-171655 실행).
+    문단 → 문장 경계까지 물리고, 경계가 절반보다 앞이면 그냥 글자 수로 자른다.
+    """
     text = (text or "").strip()
     if len(text) <= limit:
         return text
-    head = text[:limit].rstrip()
+    head = text[:limit]
+    if head.rfind("[") > head.rfind("]"):
+        head = head[:head.rfind("[")]
+    for sep, keep in (("\n\n", 0), ("다.", 2), (". ", 1)):
+        cut = head.rfind(sep)
+        if cut >= limit // 2:
+            head = head[:cut + keep]
+            break
+    head = head.rstrip()
     lost = [cid for cid in CITATION_RE.findall(text[limit:]) if f"[{cid}]" not in head]
     return head + "…" + "".join(f" [{cid}]" for cid in dict.fromkeys(lost))
 
@@ -174,7 +188,7 @@ def _select(state: dict, excluded: set[str], pinned: set[str], per_cell: int,
             chosen = [c for c in items if c["claim_id"] in pinned]
             for claim in chosen:
                 remember(claim)
-            rest = [c for c in items if c["claim_id"] not in pinned]
+            rest = sorted((c for c in items if c["claim_id"] not in pinned), key=_absence)
             while rest and len(chosen) < per_cell:
                 pick = next((c for c in rest if novel(c)), rest[0])
                 rest.remove(pick)
@@ -220,7 +234,15 @@ def _select(state: dict, excluded: set[str], pinned: set[str], per_cell: int,
             if not extra:
                 break
             add(*extra)
-    return shown
+    # Task 가 끝난 순서대로 두면 "2. ITME" 가 "1. TurboQuant" 앞에 왔다. 기술 순서로 둔다(안정 정렬).
+    return {role: sorted(items, key=lambda c: TECH_ORDER.get(c.get("technology"), len(TECH_ORDER)))
+            for role, items in shown.items()}
+
+
+def _absence(claim: dict) -> float:
+    """100자당 부재 표현 수. 낮을수록 내용 있는 Claim 이다."""
+    text = claim.get("text") or ""
+    return len(ABSENCE_RE.findall(text)) * 100 / max(len(text), 1)
 
 
 def _group_counts(claims: list[dict], tech: str, groups_of) -> dict[str, int]:
@@ -474,13 +496,34 @@ def _quality_scope(state: dict, displayed: list[str]) -> str:
     return "\n".join(lines)
 
 
+# 종료 사유 원문에는 claim_id·스키마 이름(L1Judgment)이 들어 있다. 지면에는 독자용 문구만 싣고,
+# 원문은 실행 기록(quality-v*.json·decisions.jsonl)에 남긴다.
+STOP_LABEL = (("Judge 실패", "자동 품질 판정(LLM Judge) 일부 미완료"),
+              ("MAX_RETRY", "재조사 횟수 상한 도달 — 근거 부족 미해결"),
+              ("max_repairs", "보고서 수정 횟수 상한 도달"),
+              ("max_steps", "실행 단계 상한 도달"))
+
+
+def _stop_text(reason: str) -> str:
+    for prefix, label in STOP_LABEL:
+        if reason.startswith(prefix):
+            missing = re.search(r"응답 누락 (\d+)건", reason)
+            return label + (f"(판정 응답 누락 {missing.group(1)}건)" if missing else "")
+    return reason or "미기재"
+
+
+def _failed_text(name: str, reasons: list[str]) -> str:
+    pages = next((r for r in reasons if r.startswith("pages:")), "")
+    detail = pages.removeprefix("pages:").strip() if pages else f"{len(reasons) or 1}건"
+    return f"{CRITERION_LABEL.get(name, name)} {detail}"
+
+
 def _partial_banner(partial: dict | None) -> str:
     if not partial:
         return ""
-    failed = "; ".join(f"{CRITERION_LABEL.get(name, name)}({', '.join(reasons[:2]) or '사유 미기재'})"
-                       for name, reasons in partial.get("failed", []))
+    failed = ", ".join(_failed_text(name, reasons) for name, reasons in partial.get("failed", []))
     return ("\n> ⚠️ **부분 발행(partial)** — 품질 기준을 모두 충족하지 못한 상태로 발행했다. "
-            f"종료 사유: {partial.get('stop_reason') or '미기재'}."
+            f"종료 사유: {_stop_text(partial.get('stop_reason') or '')}."
             + (f" 미달 기준: {failed}." if failed else "") + " 상세는 §6.\n")
 
 
@@ -488,9 +531,9 @@ def _partial_limits(partial: dict | None) -> str:
     if not partial:
         return ""
     lines = ["", "**품질 평가 미달 (부분 발행)**", ""]
-    for name, reasons in partial.get("failed", []):
-        lines.append(f"- {CRITERION_LABEL.get(name, name)}: " + ("; ".join(reasons) or "사유 미기재"))
-    lines.append(f"- 종료 사유: {partial.get('stop_reason') or '미기재'}")
+    lines += [f"- {_failed_text(name, reasons)}" for name, reasons in partial.get("failed", [])]
+    lines.append(f"- 종료 사유: {_stop_text(partial.get('stop_reason') or '')}")
+    lines.append("- 기준별 판정 사유 전문은 실행 기록 `quality-v*.json`·`decisions.jsonl` 에 있다.")
     return "\n".join(lines) + "\n"
 
 

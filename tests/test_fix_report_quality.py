@@ -120,3 +120,38 @@ def test_task_queries_are_added_to_the_defaults():
     task = {"technologies": ["ITME"], "queries": ["ITME testbed"], "focus": "f"}
     _, queries, _ = common.task_for({"task": task}, ["기본 질의"])
     assert queries == ["기본 질의", "ITME testbed"]
+
+
+# ── 20261007-171655 실행: 본문 중간의 불필요한 글 ──
+
+def test_clip_stops_at_a_sentence_not_inside_a_word_or_citation():
+    text = "첫 문장이다. " * 30 + f"마지막 문장은 [{A}] 로 끝난다"
+    clipped = report._clip(text, len(text) - 12)
+    assert clipped.split("…")[0].rstrip().endswith("다.")
+    assert "[e0013" not in clipped.replace(f"[{A}]", "")
+
+
+def test_absence_claims_are_picked_last_and_techs_are_ordered():
+    claims = [
+        {"claim_id": "itme", "technology": "ITME", "kind": "fact", "text": "ITME 실험", "evidence_ids": []},
+        {"claim_id": "none", "technology": "TurboQuant", "kind": "fact",
+         "text": "경쟁사 발언은 확인되지 않는다", "evidence_ids": []},
+        {"claim_id": "real", "technology": "TurboQuant", "kind": "fact",
+         "text": "SGLang 이슈에 TurboQuant 지원 요청이 올라왔다", "evidence_ids": []},
+    ]
+    shown = report._select({"stakeholder": {"claims": claims}}, set(), set(), 1, lambda c: set())
+    assert [c["claim_id"] for c in shown["stakeholder"]] == ["real", "itme"]
+
+
+def test_partial_notice_has_no_internal_ids():
+    partial = {"stop_reason": "Judge 실패 — L1Judgment: 응답 누락 3건 — r0-market-both:claim_market_①_x",
+               "failed": [("groundedness_l2", ["근거 Claim 이 없는 종합 문장: …"] * 5),
+                          ("structure", ["pages: 11쪽 > 10쪽"])]}
+    text = report._partial_banner(partial) + report._partial_limits(partial)
+    assert "L1Judgment" not in text and "claim_market" not in text and "근거 Claim 이 없는" not in text
+    assert "판정 응답 누락 3건" in text and "종합 근거(L2) 5건" in text and "구조·분량 11쪽 > 10쪽" in text
+
+
+def test_gap_items_drop_cyrillic_and_hanja():
+    gaps = common.gaps_from_text("근거 공백: ITME 1.81배 세부 실험표 стой | 漢字", role="maturity", reason="r")
+    assert [g.item for g in gaps] == ["ITME 1.81배 세부 실험표"]
