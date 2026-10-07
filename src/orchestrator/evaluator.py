@@ -123,6 +123,26 @@ def _judge(schema, prompt: str):
     raise JudgeFailure(f"{schema.__name__}: {type(last).__name__}: {last}")
 
 
+def _judge_all(schema, prompt_for, keys: list, key_of, items_of) -> dict:
+    """요청한 항목마다 판정을 받는다. 응답에서 빠진 항목은 그것만 한 번 다시 묻는다.
+
+    구조화 출력은 긴 목록에서 일부 항목을 빠뜨리곤 한다. 빠진 항목을 통과로 세면 판정하지 않은
+    것을 판정했다고 보고하게 된다. 다시 물어도 빠지면 JudgeFailure — 판정 없이 통과시키지 않는다.
+    """
+    judged: dict = {}
+    missing = list(keys)
+    for _ in range(2):
+        result = _judge(schema, prompt_for(missing))
+        for verdict in items_of(result):
+            key = key_of(verdict)
+            if key in missing and key not in judged:
+                judged[key] = verdict
+        missing = [k for k in keys if k not in judged]
+        if not missing:
+            return judged
+    raise JudgeFailure(f"{schema.__name__}: 응답 누락 {len(missing)}건 — {', '.join(map(str, missing[:5]))}")
+
+
 # ── 평가 문맥 ────────────────────────────────────────────────────────────────
 
 class Context:
@@ -154,6 +174,11 @@ class Context:
 
     def displayed_claims(self) -> list[dict]:
         return [self.claim(cid) for cid in self.displayed if self.claim(cid)]
+
+    def valid_claims(self, role: str | None = None) -> list[dict]:
+        """표시 여부와 관계없이 수집된 유효 Claim (무효 판정 제외)."""
+        return [claim for cid, (r, claim) in self.claims.items()
+                if cid not in self.excluded and (role is None or r == role)]
 
     def cells(self) -> dict[str, list[str]]:
         """표시 Claim 의 관점×기술 층. research 는 'research:tech' 층으로 둔다."""
@@ -296,26 +321,39 @@ def _code_neutrality(ctx: Context, findings: Findings):
 
 
 def _code_bias(ctx: Context, findings: Findings) -> dict:
+    """편향 ①② — 원인에 따라 고칠 단계를 나눈다.
+
+    보고서는 칸마다 일부 Claim 만 싣는다. 표시된 Claim 만 한 묶음에 몰렸고 **수집한 유효 Claim
+    전체로는 기준을 통과**하면 고르는 쪽(report)의 문제다 — 재조사로 보내면 표시 결과가 그대로라
+    재계획 라운드만 쓰고 partial 로 끝난다. 수집 근거 전체로도 실패할 때만 재조사(orchestrator).
+    """
     metrics = rules.bias_metrics(ctx.displayed_claims(), ctx.evidence, ctx.sources)
+    collected = rules.bias_metrics(ctx.valid_claims(), ctx.evidence, ctx.sources)
     disclosed = set(ctx.manifest.get("disclosed_exceptions") or [])
     for tech in TECHS:
         m = metrics[tech]
         if not m["cited"] or (m["ok_groups"] and m["ok_share"]):
             continue                         # 인용 0건은 커버리지가 잡는다
         why = (f"{tech} 인용 근거 출처 묶음 {m['n_groups']}개, 단일 묶음 비중 {m['max_share']:.0%}")
+        c = collected[tech]
+        if c["ok_groups"] and c["ok_share"]:
+            findings.fail("bias", "report",
+                          f"{why} — 수집 근거 전체는 묶음 {c['n_groups']}개·비중 {c['max_share']:.0%}로 "
+                          "통과, 표시 선택이 한 묶음에 몰렸다")
+            continue
         if rules.bias_exception(tech):
             if tech in disclosed:
                 findings.mark("bias", "accepted_exception", f"{why} — 사전 정의 예외 공개됨")
             else:
                 findings.fail("bias", "report", f"{why} — 예외 사유가 보고서에 공개되지 않았다")
             continue
-        dominant = max(m["groups"], key=m["groups"].get)
+        dominant = max(c["groups"], key=c["groups"].get)
         cells = []
         for perspective in PERSPECTIVES:
             groups = {rules.source_group(ctx.sources.get((ctx.evidence.get(e) or {}).get("source_id")) or {})
-                      for cid in ctx.shown[perspective]
-                      for e in (ctx.claim(cid).get("evidence_ids") or [])
-                      if tech in rules.techs_of(ctx.claim(cid).get("technology", "both"))}
+                      for claim in ctx.valid_claims(perspective)
+                      if tech in rules.techs_of(claim.get("technology", "both"))
+                      for e in claim.get("evidence_ids") or []}
             if groups <= {dominant}:
                 cells.append(rules.cell(perspective, tech))
         findings.fail("bias", "evidence", why, cells)
@@ -402,21 +440,24 @@ def _judge_l1(ctx: Context, findings: Findings) -> dict:
     for cid in sample:
         role = ctx.claims[cid][0]
         batches.setdefault(role, []).append(cid)
+    judged_count = 0
     for role, ids in batches.items():
-        body = "\n".join(f"- Claim {cid} [{ctx.claim(cid).get('kind')}]: {ctx.claim(cid).get('text')}\n"
-                         f"{_evidence_block(ctx, ctx.claim(cid))}" for cid in ids)
-        result = _judge(L1Judgment,
-                        "각 Claim 이 함께 적힌 인용 구절로 뒷받침되는지 판정한다. 수치·단위·비교 기준선·"
-                        "실험 조건이 구절과 다르면 뒷받침되지 않는다. 추론·가설 Claim 은 전제가 구절에 "
-                        f"있는지만 본다.\n\n{body}")
-        judged = {v.claim_id: v for v in result.verdicts}
+        def prompt(subset):
+            body = "\n".join(f"- Claim {cid} [{ctx.claim(cid).get('kind')}]: {ctx.claim(cid).get('text')}\n"
+                             f"{_evidence_block(ctx, ctx.claim(cid))}" for cid in subset)
+            return ("각 Claim 이 함께 적힌 인용 구절로 뒷받침되는지 판정한다. 수치·단위·비교 기준선·"
+                    "실험 조건이 구절과 다르면 뒷받침되지 않는다. 추론·가설 Claim 은 전제가 구절에 "
+                    f"있는지만 본다. verdicts 에 Claim 마다 한 건씩, claim_id 를 그대로 적는다.\n\n{body}")
+        judged = _judge_all(L1Judgment, prompt, ids, lambda v: v.claim_id.strip(), lambda r: r.verdicts)
+        judged_count += len(judged)
         for cid in ids:
-            verdict = judged.get(cid)
-            if verdict and not verdict.supported:
+            verdict = judged[cid]
+            if not verdict.supported:
                 _invalidate(findings, ctx.state, role, ctx.claim(cid),
                             f"Judge: 근거가 주장을 뒷받침하지 않음 — {verdict.reason}")
     total = len(dict.fromkeys(cid for ids in strata.values() for cid in ids))
-    return {"l1": f"{len(sample)}/{total}",
+    # 보낸 수가 아니라 실제로 판정을 받은 수를 기록한다(보고서 §6 의 n/N 근거).
+    return {"l1": f"{judged_count}/{total}",
             "strata": {key: sum(1 for cid in ids if cid in sample) for key, ids in sorted(strata.items())},
             "recheck": sorted(rules.recheck_claim_ids(ctx.state) & set(sample))}
 
@@ -425,16 +466,19 @@ def _judge_l2(ctx: Context, findings: Findings):
     items = _synthesis_items(ctx.state, ctx.excluded)
     if not items:
         return
-    body = "\n".join(
-        f"[{i}] {item['text']}\n" + "\n".join(f"  - 참조 {cid}: {ctx.claim(cid).get('text', '')}"
-                                             for cid in item["claim_ids"])
-        for i, item in enumerate(items))
-    result = _judge(L2Judgment, "각 종합 문장이 참조 Claim 이 말하는 범위 안에서만 서술하는지 판정한다. "
-                                "참조에 없는 수치·사례·인과를 덧붙였으면 범위를 벗어난 것이다.\n\n" + body)
-    for verdict in result.verdicts:
-        if not verdict.within_scope and 0 <= verdict.index < len(items):
+    def prompt(indices):
+        body = "\n".join(
+            f"[{i}] {items[i]['text']}\n" + "\n".join(f"  - 참조 {cid}: {ctx.claim(cid).get('text', '')}"
+                                                   for cid in items[i]["claim_ids"])
+            for i in indices)
+        return ("각 종합 문장이 참조 Claim 이 말하는 범위 안에서만 서술하는지 판정한다. 참조에 없는 "
+                "수치·사례·인과를 덧붙였으면 범위를 벗어난 것이다. verdicts 에 문장마다 한 건씩, "
+                "대괄호 번호를 index 로 적는다.\n\n" + body)
+    judged = _judge_all(L2Judgment, prompt, list(range(len(items))), lambda v: v.index, lambda r: r.verdicts)
+    for i, verdict in sorted(judged.items()):
+        if not verdict.within_scope:
             findings.fail("groundedness_l2", "synthesis",
-                          f"참조 범위 밖 서술: {items[verdict.index]['text'][:60]} — {verdict.reason}")
+                          f"참조 범위 밖 서술: {items[i]['text'][:60]} — {verdict.reason}")
 
 
 def _judge_neutrality(ctx: Context, findings: Findings):
@@ -474,6 +518,10 @@ def _judge_selectivity(ctx: Context, findings: Findings):
                               [rules.cell("market", tech), rules.cell("domain_assessment", tech)])
 
 
+# 모델이 "turboquant" 처럼 대소문자를 바꿔 돌려줘도 같은 기술로 대조한다.
+CANONICAL_TECH = {t.lower(): t for t in TECHS}
+
+
 def _judge_coverage(ctx: Context, findings: Findings, by_claims: list[str]):
     for perspective in PERSPECTIVES:
         techs = [t for t in TECHS if rules.cell(perspective, t) in by_claims]
@@ -481,14 +529,18 @@ def _judge_coverage(ctx: Context, findings: Findings, by_claims: list[str]):
             continue
         body = "\n".join(f"- [{ctx.claim(cid).get('technology')}] {ctx.claim(cid).get('text')}"
                          for cid in ctx.shown[perspective])
-        result = _judge(CoverageJudgment,
-                        f"관점 '{perspective}' 의 평가 기준은 {PERSPECTIVE_CRITERIA[perspective]} 이다. "
-                        f"기술 {', '.join(techs)} 각각에 대해 아래 본문이 이 기준을 실질적으로 다루는지 "
-                        f"판정한다(cells 에 기술마다 한 건).\n\n{body}")
-        for cell_verdict in result.cells:
-            if cell_verdict.technology in techs and not cell_verdict.substantive:
-                key = rules.cell(perspective, cell_verdict.technology)
-                findings.fail("coverage", "evidence", f"{key}: Judge — {cell_verdict.reason}", [key])
+
+        def prompt(subset, perspective=perspective, body=body):
+            return (f"관점 '{perspective}' 의 평가 기준은 {PERSPECTIVE_CRITERIA[perspective]} 이다. "
+                    f"기술 {', '.join(subset)} 각각에 대해 아래 본문이 이 기준을 실질적으로 다루는지 "
+                    f"판정한다(cells 에 기술마다 한 건, technology 는 기술 이름 그대로).\n\n{body}")
+        judged = _judge_all(CoverageJudgment, prompt, techs,
+                            lambda v: CANONICAL_TECH.get(v.technology.strip().lower(), v.technology),
+                            lambda r: r.cells)
+        for tech in techs:
+            if not judged[tech].substantive:
+                key = rules.cell(perspective, tech)
+                findings.fail("coverage", "evidence", f"{key}: Judge — {judged[tech].reason}", [key])
 
 
 # ── 렌더링 ───────────────────────────────────────────────────────────────────

@@ -141,14 +141,28 @@ def _usable(items: list, excluded: set[str]) -> list:
     return kept
 
 
-def _select(state: dict, excluded: set[str], pinned: set[str], per_cell: int) -> dict[str, list]:
+def _select(state: dict, excluded: set[str], pinned: set[str], per_cell: int,
+            groups_of) -> dict[str, list]:
     """관점(역할)·기술 칸마다 표시할 Claim 을 고른다. 원래 순서를 유지한다.
 
     - 칸 상한 `per_cell`. 종합이 참조한 Claim(`pinned`)은 먼저 넣고 상한을 넘어도 남긴다 —
       종합 문장이 보고서에 없는 Claim 을 가리키면 L2 를 통과할 수 없다.
+    - 남은 자리는 그 기술에 아직 표시하지 않은 출처 묶음을 인용한 Claim 부터 채운다. 앞에서부터
+      자르면 압축 단계에서 칸마다 같은 논문 Claim 만 남아 편향 ①② 가 표시 선택 때문에 실패한다.
     - 기술별로 한계·비용 Claim 이 하나도 표시되지 않았으면 숨은 것 중 첫 건을 더한다
       (압축 규칙, 편향 ③ 선택적 근거 사용 방지).
+    - 그래도 기술별 표시 근거가 편향 ①② 기준을 넘지 못하면, 다른 출처 묶음을 인용한 숨은
+      Claim 을 기술마다 최대 2건 더한다(수집 근거로는 통과하는데 표시만 몰리는 경우의 수리).
     """
+    seen: dict[str, set[str]] = {tech: set() for tech in TECHS}
+
+    def novel(claim) -> bool:
+        return any(groups_of(claim) - seen[t] for t in rules.techs_of(claim.get("technology", "both")))
+
+    def remember(claim):
+        for t in rules.techs_of(claim.get("technology", "both")):
+            seen[t] |= groups_of(claim)
+
     shown: dict[str, list] = {}
     for role in ASSESSMENT_ROLES:
         claims = [c for c in (state.get(role) or {}).get("claims") or []
@@ -158,26 +172,65 @@ def _select(state: dict, excluded: set[str], pinned: set[str], per_cell: int) ->
         for claim in claims:
             buckets.setdefault(claim.get("technology", "both"), []).append(claim)
         for items in buckets.values():
-            first = [c for c in items if c["claim_id"] in pinned]
-            others = [c for c in items if c["claim_id"] not in pinned]
-            chosen = first + others[:max(0, per_cell - len(first))]
+            chosen = [c for c in items if c["claim_id"] in pinned]
+            for claim in chosen:
+                remember(claim)
+            rest = [c for c in items if c["claim_id"] not in pinned]
+            while rest and len(chosen) < per_cell:
+                pick = next((c for c in rest if novel(c)), rest[0])
+                rest.remove(pick)
+                chosen.append(pick)
+                remember(pick)
             keep.update(c["claim_id"] for c in chosen)
         shown[role] = [c for c in claims if c["claim_id"] in keep]
 
+    def add(role, claim):
+        order = [c["claim_id"] for c in (state.get(role) or {}).get("claims") or []]
+        shown[role] = sorted(shown[role] + [claim], key=lambda c: order.index(c["claim_id"]))
+        remember(claim)
+
+    def hidden(tech):
+        return [(role, c) for role in ASSESSMENT_ROLES
+                for c in (state.get(role) or {}).get("claims") or []
+                if c.get("claim_id") not in excluded and c not in shown[role]
+                and tech in rules.techs_of(c.get("technology", "both"))]
+
     for tech in TECHS:
-        def covers(claim, tech=tech):
-            return tech in rules.techs_of(claim.get("technology", "both"))
-        if any(rules.is_limit_claim(c) and covers(c) for items in shown.values() for c in items):
+        if any(rules.is_limit_claim(c) and tech in rules.techs_of(c.get("technology", "both"))
+               for items in shown.values() for c in items):
             continue
-        for role in ASSESSMENT_ROLES:
-            hidden = [c for c in (state.get(role) or {}).get("claims") or []
-                      if c.get("claim_id") not in excluded and covers(c)
-                      and rules.is_limit_claim(c) and c not in shown[role]]
-            if hidden:
-                order = [c["claim_id"] for c in (state.get(role) or {}).get("claims") or []]
-                shown[role] = sorted(shown[role] + hidden[:1], key=lambda c: order.index(c["claim_id"]))
+        limit = next(((r, c) for r, c in hidden(tech) if rules.is_limit_claim(c)), None)
+        if limit:
+            add(*limit)
+
+    for tech in TECHS:
+        for _ in range(2):
+            counts = _group_counts([c for items in shown.values() for c in items], tech, groups_of)
+            if not counts or _balanced(counts):
                 break
+            dominant = max(counts, key=counts.get)
+            extra = next(((r, c) for r, c in hidden(tech) if groups_of(c) - {dominant}), None)
+            if not extra:
+                break
+            add(*extra)
     return shown
+
+
+def _group_counts(claims: list[dict], tech: str, groups_of) -> dict[str, int]:
+    """기술별 표시 근거의 출처 묶음 분포 — 근사치(Claim 단위). 최종 판정은 quality_rules.bias_metrics."""
+    counts: dict[str, int] = {}
+    for claim in claims:
+        if tech in rules.techs_of(claim.get("technology", "both")):
+            for group in groups_of(claim):
+                counts[group] = counts.get(group, 0) + 1
+    return counts
+
+
+def _balanced(counts: dict[str, int]) -> bool:
+    bias = rules.quality_config().get("bias") or {}
+    total = sum(counts.values())
+    return (len(counts) >= bias.get("min_source_groups", 2)
+            and max(counts.values()) / total <= bias.get("max_group_share", 0.6))
 
 
 def _registries(state: dict) -> tuple[dict, dict]:
@@ -224,10 +277,16 @@ def _model(state: dict, compaction: int) -> dict:
     shown_agreements = agreements[:caps["implications"]]
     shown_conflicts = conflicts[:caps["implications"]]
     pinned = {cid for item in shown_agreements + shown_conflicts for cid in _refs(item)}
-    shown = _select(state, excluded, pinned, caps["claims"])
+    evidence, sources = _registries(state)
+
+    def groups_of(claim) -> set[str]:
+        return {rules.source_group(sources.get((evidence.get(e) or {}).get("source_id"))
+                                   or {"source_id": (evidence.get(e) or {}).get("source_id", "")})
+                for e in claim.get("evidence_ids") or []}
+
+    shown = _select(state, excluded, pinned, caps["claims"], groups_of)
     gaps, hidden_gaps = _pick_gaps(state, shown, caps["gaps"])
 
-    evidence, sources = _registries(state)
     displayed = [c for role in ASSESSMENT_ROLES for c in shown[role]]
     metrics = rules.bias_metrics(displayed, evidence, sources)
     exceptions = []

@@ -52,6 +52,8 @@ b.add_edge("publish", END)
 | 5 | 보고서 문제(표시 누락·구조·예외 미공개·10쪽 초과), `repair_count < max_repairs` | report |
 | 6 | `repair_count` 소진 | publish (partial) |
 
+편향 ①② 실패는 원인을 나눈다. 표시된 Claim 만 한 묶음에 몰렸고 수집한 유효 Claim 전체로는 기준을 통과하면 **report**(보고서가 다른 묶음 근거를 골라 싣는다), 수집 근거 전체로도 실패하면 예외 확인 후 **orchestrator**. Judge 가 응답에서 빠뜨린 항목은 그것만 한 번 다시 묻고, 그래도 없으면 Judge 실패(partial)로 처리한다 — 판정하지 않은 항목을 통과로 세지 않는다(PR #19 리뷰 반영).
+
 계획서 표의 2번(`retry_count >= MAX_RETRY` → publish)은 **근거 문제가 있을 때만** 적용했다. 재계획 예산이 끝났어도 종합·보고서 수리는 `repair_count` 상한 안에서 계속할 수 있게 했다 — 재계획 라운드와 수리는 서로 다른 상한이기 때문이다.
 
 ## 3. README 에 옮길 문구 (C 담당 부분)
@@ -70,6 +72,8 @@ b.add_edge("publish", END)
 | 구조·분량 | SUMMARY 처음·REFERENCE 끝·인용–참고문헌 일치·렌더링 PDF ≤ 10쪽 | — | report 재조립·압축 |
 
 - 출처 묶음: 논문은 1저자 소속(TurboQuant=Google, ITME=SK hynix, InfiniGen=서울대, PIM-CXL=한양대), 그 밖은 발행 주체. 설정 `quality.source_groups`.
+- 보고서는 칸마다 아직 표시하지 않은 출처 묶음의 Claim 을 먼저 고르고, 그래도 기준을 넘지 못하면 다른 묶음 Claim 을 기술마다 최대 2건 더 싣는다. 표시 선택만의 편중은 재조사가 아니라 보고서 수리로 고친다.
+- Judge 가 응답에서 빠뜨린 항목은 다시 묻고, 끝내 판정하지 못하면 통과로 세지 않는다. 보고서 §6 의 n/N 은 실제로 판정을 받은 수다.
 - 사전 정의 예외: ITME 직접 원문은 SK hynix 자료뿐이라 ①② 가 실패해도 보고서 §6 에 사유·조사 범위를 공개하면 통과로 본다. ③ 은 예외와 무관하게 매번 검사한다.
 - 실행 실패(`execution_gap`)·무효 근거(`invalid_evidence`)는 커버리지 근거가 되지 못한다.
 - 판정 전문: `runs/<run_id>/quality-v{n}.json`, 결정·사유: `runs/<run_id>/decisions.jsonl`.

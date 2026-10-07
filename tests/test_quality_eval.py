@@ -247,17 +247,26 @@ class FakeJudge:
         return self.answer(self.schema, prompt)
 
 
+def asked(prompt):
+    """대역 Judge 가 프롬프트에서 판정 대상 키를 읽는다 — L1 claim_id, L2 번호, 커버리지 기술."""
+    import re
+    claims = [line.split()[2] for line in prompt.splitlines() if line.startswith("- Claim ")]
+    indices = [int(m) for m in re.findall(r"^\[(\d+)\] ", prompt, re.MULTILINE)]
+    techs = re.search(r"기술 (.+?) 각각", prompt)
+    return claims, indices, techs.group(1).split(", ") if techs else []
+
+
 def agreeable(schema, prompt):
+    claims, indices, techs = asked(prompt)
     if schema is evaluator.L1Judgment:
-        ids = [line.split()[2].rstrip(":") for line in prompt.splitlines() if line.startswith("- Claim ")]
-        return schema(verdicts=[{"claim_id": cid, "supported": True} for cid in ids])
+        return schema(verdicts=[{"claim_id": cid, "supported": True} for cid in claims])
     if schema is evaluator.L2Judgment:
-        return schema(verdicts=[])
+        return schema(verdicts=[{"index": i, "within_scope": True} for i in indices])
     if schema is evaluator.NeutralityJudgment:
         return schema(neutral=True)
     if schema is evaluator.SelectivityJudgment:
         return schema(selective=False)
-    return schema(cells=[])
+    return schema(cells=[{"technology": t, "substantive": True} for t in techs])
 
 
 def test_judge_runs_on_every_criterion(state, monkeypatch):
@@ -306,3 +315,130 @@ def test_stratified_sample_is_deterministic_and_keeps_recheck():
     assert sample == quality_rules.stratified_sample(cells, {"c3-19"}, 10)
     assert {cid.split("-")[0] for cid in sample} == {"c0", "c1", "c2", "c3"}    # 층마다 뽑는다
     assert quality_rules.stratified_sample({"a": ["x"], "b": ["x", "y"]}, set(), 60) == ["x", "y"]
+
+
+# ── 리뷰 반영: Judge 응답 누락 (PR #19) ──────────────────────────────────────
+
+def judge_on(state, monkeypatch, answer):
+    judge = FakeJudge(answer)
+    monkeypatch.setattr(evaluator, "judge_llm", lambda: judge)
+    state["run_config"]["quality_judge"] = True
+    return judge
+
+
+def test_missing_l1_items_are_asked_again(state, monkeypatch):
+    """처음 응답이 일부를 빠뜨리면 빠진 것만 다시 묻는다. 기록은 실제 판정 수다."""
+    first = {}
+
+    def answer(schema, prompt):
+        claims, _, _ = asked(prompt)
+        if schema is evaluator.L1Judgment and len(claims) > 1 and not first.get(claims[0]):
+            first[claims[0]] = True
+            return schema(verdicts=[{"claim_id": claims[0], "supported": True}])   # 나머지 누락
+        return agreeable(schema, prompt)
+    judge = judge_on(state, monkeypatch, answer)
+    out = evaluate(state)
+
+    assert out["quality_eval"]["passed"] and out["quality_eval"]["scope"]["l1"] == "9/9"
+    assert judge.schemas.count("L1Judgment") > len({"research", "maturity", "market",
+                                                     "stakeholder", "domain_assessment"})
+
+
+def test_items_the_judge_never_answers_are_not_passed(state, monkeypatch):
+    """다시 물어도 빠지면 통과가 아니라 Judge 실패 — partial 로 발행한다."""
+    def answer(schema, prompt):
+        if schema is evaluator.L1Judgment:
+            claims, _, _ = asked(prompt)        # STAKE_ITME 에는 몇 번을 물어도 답하지 않는다
+            return schema(verdicts=[{"claim_id": cid, "supported": True}
+                                    for cid in claims if cid != STAKE_ITME])
+        return agreeable(schema, prompt)
+    judge_on(state, monkeypatch, answer)
+    out = evaluate(state)
+
+    assert not out["quality_eval"]["passed"]
+    assert out["quality_eval"]["next"] == "publish" and "응답 누락" in out["stop_reason"]
+    assert out["quality_eval"]["verdicts"]["groundedness_l1"]["status"] == "skipped"
+
+
+def test_missing_l2_index_is_not_passed(state, monkeypatch):
+    def answer(schema, prompt):
+        if schema is evaluator.L2Judgment:
+            return schema(verdicts=[])
+        return agreeable(schema, prompt)
+    judge_on(state, monkeypatch, answer)
+
+    assert "L2Judgment: 응답 누락" in evaluate(state)["stop_reason"]
+
+
+def test_coverage_technology_case_is_normalized(state, monkeypatch):
+    def answer(schema, prompt):
+        if schema is evaluator.CoverageJudgment:
+            _, _, techs = asked(prompt)
+            return schema(cells=[{"technology": t.lower(), "substantive": t != "ITME"} for t in techs])
+        return agreeable(schema, prompt)
+    judge_on(state, monkeypatch, answer)
+    coverage = evaluate(state)["quality_eval"]["verdicts"]["coverage"]
+
+    assert coverage["status"] == "fail" and "maturity:ITME" in coverage["target_cells"]
+
+
+# ── 리뷰 반영: 편향 ①② 원인 구분 (PR #19) ─────────────────────────────────────
+
+def diverse_hidden(state, monkeypatch):
+    """표시 Claim 은 모두 google 묶음, 숨은 maturity Claim 4건은 서로 다른 묶음."""
+    roles = ("research", "maturity", "market", "stakeholder", "domain_assessment")
+    config = quality_rules.quality_config() | {
+        "source_groups": {f"src-{p}-turboquant": "google" for p in roles}, "exceptions": []}
+    monkeypatch.setattr(quality_rules, "quality_config", lambda: config)
+    maturity = state["maturity"]
+    for i in range(4):
+        evidence_id = f"{i}" * 12
+        maturity["sources"].append({"source_id": f"other-{i}", "run_id": state["run_id"],
+                                    "collection": "papers_core", "allowed_uses": ["maturity"],
+                                    "title": f"다른 묶음 {i}"})
+        maturity["evidence"].append({"evidence_id": evidence_id, "source_id": f"other-{i}",
+                                     "run_id": state["run_id"], "collection": "papers_core",
+                                     "quote": "다른 묶음 인용", "location": "page:1",
+                                     "allowed_uses": ["maturity"]})
+        maturity["claims"].append({"claim_id": f"hidden-{i}", "text": f"TurboQuant 다른 근거 {i}",
+                                   "technology": "TurboQuant", "kind": "fact",
+                                   "evidence_ids": [evidence_id]})
+    return state
+
+
+def test_display_only_skew_goes_back_to_report_not_orchestrator(state, monkeypatch):
+    """수집 근거 전체로는 통과하는데 표시만 한 묶음이면 재조사가 아니라 보고서 수리다."""
+    out = reported(diverse_hidden(collected_from(state), monkeypatch))
+    sections = out["report_manifest"]["sections"]
+    sections["maturity"] = [c for c in sections["maturity"] if not c.startswith("hidden-")]
+    out["report_manifest"]["references"] = [r for r in out["report_manifest"]["references"]
+                                            if not r.startswith("other-")]
+    quality = evaluate(out)["quality_eval"]
+    bias = quality["verdicts"]["bias"]
+
+    assert bias["status"] == "fail" and bias["target_cells"] == []
+    assert "표시 선택이 한 묶음에 몰렸다" in bias["reasons"][0]
+    assert quality["next"] == "report"
+
+
+def test_report_selection_spreads_source_groups(state, monkeypatch):
+    """보고서가 다른 묶음 근거를 골라 실으므로 report 단계 수리로 실제로 고쳐진다."""
+    out = reported(diverse_hidden(collected_from(state), monkeypatch))
+
+    assert sum(c.startswith("hidden-") for c in out["report_manifest"]["sections"]["maturity"]) >= 3
+    assert evaluate(out)["quality_eval"]["verdicts"]["bias"]["status"] == "pass"
+
+
+def test_skew_in_collected_evidence_still_goes_to_orchestrator(state, monkeypatch):
+    roles = ("research", "maturity", "market", "stakeholder", "domain_assessment")
+    config = quality_rules.quality_config() | {
+        "source_groups": {f"src-{p}-turboquant": "google" for p in roles}, "exceptions": []}
+    monkeypatch.setattr(quality_rules, "quality_config", lambda: config)
+    quality = evaluate(reported(collected_from(state)))["quality_eval"]
+
+    assert quality["verdicts"]["bias"]["target_cells"] and quality["next"] == "orchestrator"
+
+
+def collected_from(state):
+    """보고서 결과 키를 지운 State — 보고서를 처음부터 다시 만든다."""
+    return {k: v for k, v in state.items() if k not in ("report", "report_manifest", "report_version")}
