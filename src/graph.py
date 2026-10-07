@@ -104,6 +104,9 @@ def setup(state) -> dict:
             "trace": [event("setup", sources=len(manifest), run_id=state["run_id"])]}
 
 
+FETCH_LOCAL = {"allowed_uses", "snapshot_path", "body_path", "retrieved_at", "requested_url"}
+
+
 def _merge_one(store: dict, item: dict, id_field: str, node: str) -> list[str]:
     """ID 하나를 레지스트리에 합친다. 같은 ID 에 다른 내용이 오면 병합 오류다(§7).
 
@@ -112,6 +115,10 @@ def _merge_one(store: dict, item: dict, id_field: str, node: str) -> list[str]:
     속성이 아니라 **사용 권한**이라, 같은 청크를 TRL 노드와 시장성 노드가 각각 인용하면
     자기 역할만 적어 온다. 이걸 내용 불일치로 보면 정상 실행이 전부 병합 오류가 된다.
     노드별 권한 검사는 각 Assessment 안에서 이미 끝났다(§8).
+
+    받아 온 방식에 딸린 값(`FETCH_LOCAL`)도 비교에서 뺀다. 웹 저장소가 Task 별 폴더라
+    두 Task 가 같은 원문을 받으면 ID 는 같아도 스냅샷 경로·수집 시각이 다르다. 이때는
+    먼저 들어온 레코드를 남긴다.
     """
     ident = item[id_field]
     kept = store.get(ident)
@@ -119,8 +126,10 @@ def _merge_one(store: dict, item: dict, id_field: str, node: str) -> list[str]:
         store[ident] = dict(item)
         return []
 
-    without_uses = {k: v for k, v in item.items() if k != "allowed_uses"}
-    if {k: v for k, v in kept.items() if k != "allowed_uses"} != without_uses:
+    def content(record: dict) -> dict:
+        return {k: v for k, v in record.items() if k not in FETCH_LOCAL}
+
+    if content(kept) != content(item):
         return [f"{node}: {ident} 가 기존 내용과 다르다"]
 
     kept["allowed_uses"] = sorted({*(kept.get("allowed_uses") or []),
