@@ -1,14 +1,14 @@
-"""실행 진입점 — 담당: R1
+"""실행 진입점 — 담당 A
 
     uv run python app.py
     uv run python app.py --domain "데이터센터/클라우드 (대규모 동시성, 비용 민감)"
-    uv run python app.py --resume 20260922-141233-a1b2c3   # 검토 대기 초안 재개
 
-실행 하나가 `runs/<run_id>/` 하나를 소유한다. R3 의 웹 스냅샷도 그 아래에 쌓이므로
-run_id 를 발급하는 것이 이 파일의 첫 번째 책임이다.
+실행 하나가 `runs/<run_id>/` 하나를 소유한다. 웹 스냅샷·Worker 결과·결정 로그도 그 아래에
+쌓이므로 run_id 를 발급하는 것이 이 파일의 첫 번째 책임이다.
 
-**R4·R5 가 새 Assessment 계약으로 이행하기 전에는 끝까지 돌지 않는다.** research 노드에서
-NotImplementedError 로 멈추고 실패를 기록한다. 전 경로 실행은 `scripts/r1_smoke.py` 로 한다.
+Orchestrator-Workers 전환 중이다. 품질 평가(`quality_eval`, 담당 C)가 머지되기 전에는
+실제 실행이 품질 평가 노드에서 멈춘다. 사람 검토 재개(`--resume`)는 A4 에서 선택 단계로
+다시 붙인다.
 """
 
 import argparse
@@ -29,7 +29,7 @@ os.chdir(_ROOT)
 from dotenv import load_dotenv
 from langchain_community.callbacks import get_openai_callback
 
-from src.graph import MergeConflict, build_graph, invoke, resume_state, run_dir
+from src.graph import MergeConflict, build_graph, invoke, run_dir
 from src.llm import enable_cache, llm_report
 from src.settings import settings
 from src.tools.web_store import save_json, utcnow
@@ -111,22 +111,19 @@ def main():
     config = settings()["run"]
 
     if args.resume:
-        # 부록 A 의 `검토 결과 반영 후 재개` — 내용 검토부터 이어 간다. 평가·종합은 다시 돌리지 않는다.
-        state = resume_state(args.resume, config["runs_dir"])
-        start = "review"
-    else:
-        state = {"run_id": args.run_id or new_run_id(), "run_status": "running", "trace": [],
-                 "run_config": {"domain": args.domain, "model": settings()["llm"],
-                                "limits": settings()["limits"], "started_at": utcnow(),
-                                "no_carry_review": args.no_carry_review, **config}}
-        start = "setup"
+        # 사람 검토 재개는 Orchestrator-Workers 그래프에서 선택 단계(--human-review)로 다시 붙인다(A4).
+        sys.exit("--resume 은 Orchestrator-Workers 전환 중 지원하지 않는다 (A4 에서 --human-review 로 대체)")
+    state = {"run_id": args.run_id or new_run_id(), "run_status": "running", "trace": [],
+             "run_config": {"domain": args.domain, "model": settings()["llm"],
+                            "limits": settings()["limits"], "started_at": utcnow(),
+                            "no_carry_review": args.no_carry_review, **config}}
 
     directory = start_run(state)
     print(f"[run] {state['run_id']} · {directory}")
 
     with get_openai_callback() as usage:
         try:
-            final = invoke(build_graph(start=start), state)
+            final = invoke(build_graph(), state)
         except MergeConflict as exc:
             # 근거가 서로 어긋났다. merge-errors.json 은 collect_evidence 가 이미 남겼다.
             print(f"실패: 근거 병합 오류 — {exc}")

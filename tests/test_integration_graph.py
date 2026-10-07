@@ -1,11 +1,14 @@
-"""실물 노드로 그래프를 끝까지 돌린다 — 담당: R1
+"""실물 노드로 그래프를 끝까지 돌린다 — 담당 A
 
-`tests/test_r1_graph.py` 는 mock 노드로 **배선**을 본다. 이쪽은 `DEFAULT_NODES` 의
-실물을 그대로 쓰고 검색·LLM·색인만 fixture 로 막아 **계약이 맞물리는지** 본다.
-R4 의 Assessment → R1 의 병합 → R5 의 종합·검토·보고서·제출본이 한 줄로 이어져야 한다.
+`tests/test_r1_graph.py` 는 mock 노드로 **배선**을 본다. 이쪽은 `DEFAULT_NODES` 와 실제
+에이전트를 그대로 쓰고 검색·LLM·색인만 fixture 로 막아 **계약이 맞물리는지** 본다.
+research → orchestrator 계획 → Worker(실제 에이전트) → 병합 → 종합·보고서·제출본이 한 줄로
+이어져야 한다.
 
-`stakeholder` 만 stub 이다. 네트워크와 실행별 저장소를 쓰는 노드라 R3 의
-`scripts/r3_smoke.py` 가 따로 검증한다.
+대역 두 가지
+- `stakeholder` 에이전트: 네트워크와 실행별 저장소를 쓴다. `scripts/r3_smoke.py` 가 따로 검증한다.
+- `quality_eval`: 담당 C 가 구현하기 전까지 계약 형식(schema.QualityEval)의 통과 판정을 쓴다.
+  사람 검토 재개 경로는 A4 에서 선택 단계(--human-review)로 다시 붙이며 그때 테스트를 쓴다.
 """
 
 import json
@@ -14,6 +17,7 @@ import pytest
 
 from src.agents import domain, market, maturity, research
 from src.graph import build_graph, invoke
+from tests import mock_nodes
 from src.output import pdf
 from src.schema import Assessment
 
@@ -124,21 +128,25 @@ def wired(monkeypatch, tmp_path):
             "run_config": {"domain": "데이터센터/클라우드", "technologies": ["TurboQuant", "ITME"],
                            "runs_dir": str(tmp_path), "started_at": "2026-09-22T00:00:00+00:00"},
         }
-        graph = build_graph(stakeholder=stakeholder_stub, **overrides)
+        overrides = {"quality_eval": mock_nodes.quality_eval("publish")} | overrides
+        graph = build_graph(workers={"stakeholder": stakeholder_stub}, **overrides)
         return invoke(graph, initial), tmp_path / initial["run_id"]
 
     return run
 
 
-def test_pipeline_stops_for_human_review(wired):
-    """첫 실행은 검토 대기다. §8 — ID 대조만으로 자동 통과시키지 않는다."""
+def test_pipeline_produces_the_submission(wired):
+    """계획 → Worker → 병합 → 종합 → 보고서 → 품질 평가(대역 통과) → 제출본."""
     final, directory = wired()
 
-    assert final["run_status"] == "partial"
-    assert final["review_status"] == "pending"
-    assert "report" not in final
-    assert (directory / "review.csv").exists()
-    assert (directory / "draft.json").exists()
+    assert "## REFERENCE" in final["report"]
+    assert final["report_paths"][0].endswith("report.md")
+    assert json.loads((directory / "submission.json").read_text())["generated"] is True
+    assert final["validation"]["errors"] == []
+    # Worker 결과는 Task 별 파일로 남는다
+    assert sorted(p.name for p in (directory / "workers").iterdir()) == [
+        "r0-domain_assessment-both.json", "r0-market-both.json",
+        "r0-maturity-both.json", "r0-stakeholder-both.json"]
 
 
 def test_every_assessment_merges_into_the_registries(wired):
@@ -169,60 +177,19 @@ def test_gaps_are_merged_sequentially(wired):
     assert "두 기술의 결합 실측 자료 미확인" not in items
 
 
-def test_resume_after_review_produces_the_submission(wired, tmp_path):
-    """검토 판정을 채우고 재개하면 보고서와 제출본까지 나온다 (부록 A).
+def test_invalid_claims_never_reach_the_report(wired):
+    """claim_flags 가 invalid 인 Claim 은 종합·보고서·참고문헌에 들어가지 않는다(계획서 §5)."""
+    first, _ = wired()
+    rejected = [c["claim_id"] for c in first["market"]["claims"]]
+    assert rejected and all(c.startswith("r0-market-both:") for c in rejected)
 
-    평가 보류 항목이 남아 있으므로 run_status 는 partial 이다. §7 — 부분 결과는 일부
-    항목을 평가 보류로 남겼으나 포함된 주장의 검증은 통과한 경우다. 보고서는 낸다.
-    """
-    import csv
+    # 에이전트가 run_id 로 Claim ID 를 만들므로 같은 run_id 로 다시 돌린다.
+    state = {"run_id": first["run_id"], "run_status": "running", "trace": [],
+             "claim_flags": {cid: {"status": "invalid", "by": "quality_eval"} for cid in rejected},
+             "run_config": first["run_config"]}
+    final, _ = wired(state=state)
 
-    _, directory = wired()
-
-    path = directory / "review.csv"
-    rows = list(csv.DictReader(path.open(encoding="utf-8-sig")))
-    for row in rows:
-        row["review_result"] = "확인"
-        row["reviewer"] = "권예리"
-    with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
-
-    draft = json.loads((directory / "draft.json").read_text(encoding="utf-8"))
-    final, _ = wired(state=draft | {"trace": []}, start="review")
-
-    assert final["run_status"] == "partial"     # 근거 공백이 남았다. 실패가 아니다.
-    assert final["review_status"] == "passed"
-    assert "## REFERENCE" in final["report"]
-    assert final["report_paths"][0].endswith("report.md")
-    assert (directory / "final").is_dir()
-    assert json.loads((directory / "submission.json").read_text())["generated"] is True
-
-
-def test_rejected_claim_never_reaches_the_report(wired, tmp_path):
-    """§8 — 부결된 주장은 사실 서술에서 제외한다."""
-    import csv
-
-    _, directory = wired()
-    path = directory / "review.csv"
-    rows = list(csv.DictReader(path.open(encoding="utf-8-sig")))
-    for row in rows:
-        row["review_result"] = "부결" if row["node"] == "market" else "확인"
-        row["reviewer"] = "권예리"
-    with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
-
-    draft = json.loads((directory / "draft.json").read_text(encoding="utf-8"))
-    final, _ = wired(state=draft | {"trace": []}, start="review")
-
-    rejected = final["validation"]["rejected_claims"]
-    assert rejected
-
-    body = final["report"][:final["report"].index("## 5. 시사점")]
-    assert "발표 단계, 배포 확인 미확인" not in body      # 부결된 시장성 주장이 본문에 없다
-    limits = final["report"][final["report"].index("## 6. 한계"):]
-    assert all(f"검토 부결: {claim_id}" in limits for claim_id in rejected)
-    assert "cxl-report" not in final["report"]           # 그 주장의 출처도 REFERENCE 에서 빠진다
+    assert final["market"]["claims"] == []
+    assert "발표 단계, 배포 확인 미확인" not in final["report"]
+    kinds = {(g["role"], g["kind"]) for g in final["gaps"] if g.get("kind")}
+    assert ("market", "invalid_evidence") in kinds
