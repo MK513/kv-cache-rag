@@ -43,10 +43,12 @@ def setup(state):
 
 def synthesis(state):
     """종합. gaps 는 합류분에 자기 공백을 순차 병합한다(설계서 §7)."""
+    version = ((state.get("synthesis") or {}).get("synthesis_version") or 0) + 1
     return {"synthesis": {"agreements": ["합성 일치"],
                           "conflicts": [{"perspective": "TRL", "why": "합성"}],
                           "gaps": [g["item"] for g in state["gaps"]],
-                          "combination_hypothesis": "합성 가설"},
+                          "combination_hypothesis": "합성 가설",
+                          "synthesis_version": version},
             "gaps": state["gaps"] + [{"role": "synthesis", "technology": "ITME",
                                       "item": "결합 실측", "reason": "공개된 결합 실험 없음"}],
             "trace": [{"node": "synthesis", "status": "ok"}]}
@@ -56,13 +58,18 @@ def quality_eval(next_node="publish", passed=True):
     """품질 평가 대역 — schema.QualityEval 형식. 담당 C 구현 전까지 그래프 경로 검증용."""
     def fn(state):
         return {"quality_eval": {"passed": passed, "next": next_node, "verdicts": {},
-                                 "evaluated_report_version": 1},
+                                 "evaluated_report_version": state.get("report_version") or 1},
                 "trace": [{"node": "quality_eval", "status": "ok"}]}
     return fn
 
 
 def report(state):
+    """보고서. 발행 전 버전 검사(versions.check_publish_guard)가 보는 버전 필드를 함께 쓴다."""
+    version = (state.get("report_version") or 0) + 1
     return {"report": f"# 합성 보고서\n\n인용 {len(state['evidence_registry'])}건",
+            "report_version": version,
+            "report_manifest": {"report_version": version,
+                                "based_on_synthesis_version": state["synthesis"]["synthesis_version"]},
             "trace": [{"node": "report", "status": "ok"}]}
 
 

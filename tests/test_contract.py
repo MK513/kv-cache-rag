@@ -103,11 +103,8 @@ def test_log_decision(tmp_path):
     assert summary["reason"] == "최초 계획"
 
 
-def test_lane_stubs_are_explicit():
-    # C 레인(evaluator·versions)은 agent/ow-quality 에서 구현됐다. 남은 스텁은 A 의 worker 다.
-    from src.agents.worker import worker
-    with pytest.raises(NotImplementedError):
-        worker({})
+def test_contract_fixture_passes_the_publish_guard():
+    # 세 레인 스텁은 모두 구현됐다. 계약 픽스처가 발행 전 버전 검사를 통과하는지만 남긴다.
     assert versions.check_publish_guard(load("state_after_report.json")) == []
 
 

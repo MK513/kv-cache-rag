@@ -28,7 +28,7 @@ def quality(first_verdicts=None, *, rounds=1, schedule=None):
         again = i < len(plan)
         return {"quality_eval": {"passed": not again, "next": "orchestrator" if again else "publish",
                                  "verdicts": plan[i] if again else {},
-                                 "evaluated_report_version": 1},
+                                 "evaluated_report_version": state.get("report_version") or 1},
                 "trace": [{"node": "quality_eval", "status": "ok"}]}
     return fn
 

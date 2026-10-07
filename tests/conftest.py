@@ -39,3 +39,16 @@ def no_probe_search(monkeypatch):
     def blocked(*args, **kwargs):
         raise RuntimeError("테스트에서는 사전 조사 검색을 부르지 않는다")
     monkeypatch.setattr(planner, "PROBE_SEARCH", blocked)
+
+
+@pytest.fixture(autouse=True)
+def uncalibrated_tau(monkeypatch):
+    """보정된 τ(설정값)가 단위 테스트 픽스처의 유사도를 가르지 않게 한다.
+
+    `common.worker_meta` 의 retrieved 집계와 계획의 사전 조사가 모두 설정의 τ 를 읽는다.
+    픽스처 점수는 보정 코퍼스와 무관하므로 테스트에서는 τ 를 비운다(보정 전과 같은 동작).
+    τ 를 시험하는 테스트는 `planner._cfg` 나 `common.settings` 를 직접 덮어쓴다.
+    """
+    from src.settings import settings
+
+    monkeypatch.setitem(settings()["orchestrator"]["split"], "tau", None)
