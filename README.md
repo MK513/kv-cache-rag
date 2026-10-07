@@ -22,21 +22,14 @@
 - **Objective** : 하나의 기술을 여러 관점에서 비교하고 평가합니다 — 우열 판정이 아니라 관점 간
   근거의 일치·상충을 정리합니다.
 - **Pattern** : **Orchestrator-Workers**
-  - 선정 이유 — 관점별 조사를 몇 개로 나눌지가 **실행 시점의 근거 상태**에 따라 달라집니다.
-    두 기술 모두 근거가 충분한 관점은 기술별로 나누고, 한 기술 근거가 비면 그 칸은 계획 단계의
-    근거 공백으로 두고 다른 기술만 조사합니다. 이 분해를 Orchestrator 가 계획하고 그 수만큼
-    Worker 를 보냅니다.
-  - trade-off — 얻는 것: 계획이 State 에 남아 무엇을 왜 몇 개로 나눴는지 추적 가능, Worker 병렬
-    실행, 품질 미달 시 부족한 칸만 재조사. 치르는 것: 계획 단계 비용, 계획의 비결정성(결정적 개수
-    규칙·LLM 캐시로 완화), 실행 도중 즉시 재배치는 Supervisor 보다 약함(평가 후 재계획으로만 조정).
+  - 선정 이유 — 조사를 몇 개로 나눌지가 **실행 시점의 근거 상태**에 따라 달라집니다. 근거가 빈
+    칸은 계획 단계에서 근거 공백으로 두고, 나머지 칸 수만큼 Worker 를 보냅니다.
+  - trade-off — 얻는 것: 분해 사유 추적, 병렬 실행, 부족한 칸만 재조사. 치르는 것: 계획 비용,
+    계획의 비결정성(결정적 개수 규칙으로 완화), 실행 중 즉시 재배치 불가(평가 후 재계획으로만 조정).
 - **동적 처리** : 고정 순서(`research → maturity·market·stakeholder·domain 4개 고정 fan-out`)와 달리
-  - **Worker 목록이 코드에 없습니다.** orchestrator 가 세운 `plan` 의 Task 수만큼 `Send` 로 Worker 를
-    띄웁니다(최초 계획 4~7개, 재계획은 미충족 칸만, 라운드당 상한 8). 최초 개수는 근거 가용성
-    사전 조사(유사도 ≥ τ 청크 수)와 결정적 규칙이 정하고, LLM 은 Task 의 focus·질의만 채웁니다.
-  - 보고서를 만든 뒤 `quality_eval` 이 6기준으로 평가해 **다음 노드를 고릅니다** — 근거 문제는
-    orchestrator 재계획(실패·지목된 칸만), 종합 문제는 synthesis, 보고서 문제는 report, 통과면 발행.
-  - Worker 하나가 예외를 내도 그래프는 멈추지 않습니다. 실패한 칸은 `execution_gap` 으로 남고, 품질 평가가
-    재계획으로 보내면 일시 오류 칸만 다시 조사합니다(영구 오류는 제외).
+  Worker 목록이 코드에 없습니다. orchestrator 가 근거 가용성을 보고 세운 `plan` 의
+  Task 수만큼 `Send` 로 Worker 를 띄우고(최초 4~7개, 상한 8), `quality_eval` 이 평가 결과로 다음 노드
+  (재계획·synthesis·report·발행)를 고릅니다. 실패한 Worker 칸은 `execution_gap` 으로 남고 재계획 때 다시 조사합니다.
 
 ---
 
@@ -60,10 +53,8 @@
   관점 간 근거 오염 방지
 - 모든 주장은 `Claim → Evidence → Source` 로 원문 위치까지 이어지고, 근거가 없으면 Gap 으로 남깁니다
   (`evidence_gap`·`execution_gap`·`invalid_evidence`)
-- **확증 편향 방지 전략** : 상충을 강제하지 않되(억지 상충 금지) 기술별 검색 기회를 맞추고, 필터
-  통과 전 컬렉션 전체를 랭킹한 뒤 필터링해 비대칭 코퍼스의 쏠림을 완화합니다. 품질 평가에서
-  ① 기술별 출처 묶음 ≥ 2 ② 단일 묶음 비중 ≤ 60% ③ 선택적 근거 사용(한계·비용 주장 누락)을 검사하고,
-  ITME 처럼 구조적으로 못 넘는 경우는 사전 정의 예외로 보고서 §6 에 사유를 공개합니다.
+- **확증 편향 방지** : 상충을 강제하지 않고 기술별 검색 기회를 맞춥니다. 아래 bias 기준을 못 넘는
+  구조적 비대칭(ITME)은 보고서 §6 에 예외로 공개합니다.
 - **보고서 품질 평가** : 코드 검사 → LLM Judge 의 Hybrid. 아래 6기준을 실제로 표시된 보고서
   (`report_manifest`)에 대해 평가하고, 실패 기준에 따라 재작업 노드를 고릅니다.
 
@@ -91,36 +82,20 @@
 | Retrieval | FAISS dense(코사인) 단일 모드. 평가 지표 Hit Rate@K 와 MRR@K (`eval/retrieval_metrics.py`) |
 | Embedding | intfloat/multilingual-e5-small (384차원, revision 고정) — 한국어 질의로 영어 원문을 찾는 cross-lingual 검색, CPU 로 돌아가는 크기 |
 
-검색 품질 (`uv run python -m eval.retrieval_metrics`, papers_core · dense) — 실측 후 기입 예정
-
-| Lang | n | Hit@1 | Hit@3 | Hit@5 | MRR@3 | MRR@5 |
-|---|---|---|---|---|---|---|
-| 전체 | | | | | | |
-| ko | | | | | | |
-| en | | | | | | |
-
 ---
 
 ## Agents
 
-- **Orchestrator** (`orchestrator`) : research 결과로 조사 계획을 세웁니다. 근거 가용성 사전 조사(결정적,
-  LLM 없음) → Task 개수 규칙 → LLM 이 Task 마다 focus·질의·사유만 채웁니다. 개수가 다르거나 호출이
-  실패하면 같은 개수의 결정적 기본 계획을 씁니다. 재계획 때는 일시 오류로 실패한 칸과 품질 평가가
-  지목한 칸만 다시 보냅니다.
-- **선행 조사** (`research`) : 접근 방식·적용 범위·한계를 추출합니다 — 계획의 입력 (papers_core)
-- **Workers** (`worker`) : Task 의 관점으로 아래 에이전트를 골라 실행하고 결과를 `worker_results` 에 누적합니다.
-  - `maturity` — TRL 규칙표 기반 성숙도 판정 (papers_core)
-  - `market` — 규모·채택·생태계 평가 (ecosystem)
-  - `stakeholder` — 경쟁·도입·개발자·투자 반응 평가 (웹, 색인 안 함)
-  - `domain_assessment` — 데이터센터/클라우드 적합성 평가 (papers_core + context)
-- **Fan-in** (`collect_evidence`) : 라운드별 유효 결과를 골라 출처·근거를 병합합니다. 같은 ID 에 다른
-  내용이 오면 병합 오류로 실행을 끝냅니다.
-- **Synthesis** (`synthesis`) : 관점 간 일치·상충·근거 공백을 병합하고 결합 가설을 분리합니다.
-- **Report** (`report`) : 목차 조립과 10쪽 상한 압축 (Markdown)
-- **Evaluator** (`quality_eval`) : 6기준 평가 후 다음 노드를 정합니다.
-- **Human Review** (`human_review` · `apply_review`, 선택) : worksheet 를 만들고 멈춘 뒤, 부결 Claim 을
-  빼고 재종합합니다.
-- **Publish** (`publish`) : publish guard(평가한 버전 = 발행할 버전) 확인 후 제출본을 저장합니다.
+- **Orchestrator** (`orchestrator`) : 근거 가용성 사전 조사 → 결정적 개수 규칙 → LLM 이 Task 별 focus·질의만 채움. 재계획은 실패·지목된 칸만
+- **선행 조사** (`research`) : 접근 방식·적용 범위·한계 추출 (papers_core)
+- **Workers** (`worker`) : Task 의 관점별 에이전트 실행 → `worker_results` 누적
+  - `maturity` TRL 판정 (papers_core) · `market` 규모·채택·생태계 (ecosystem) · `stakeholder` 경쟁·도입·투자 반응 (웹) · `domain_assessment` 데이터센터/클라우드 적합성 (papers_core + context)
+- **Fan-in** (`collect_evidence`) : 라운드별 유효 결과의 출처·근거 병합. ID 충돌 시 실행 중단
+- **Synthesis** (`synthesis`) : 관점 간 일치·상충·근거 공백 정리
+- **Report** (`report`) : 목차 조립, 10쪽 상한 압축
+- **Evaluator** (`quality_eval`) : 6기준 평가 후 다음 노드 결정
+- **Human Review** (`human_review` · `apply_review`, 선택) : worksheet 에서 멈춘 뒤 부결 Claim 을 빼고 재종합
+- **Publish** (`publish`) : 평가한 버전 = 발행할 버전 확인 후 제출본 저장
 
 ---
 
@@ -157,34 +132,7 @@
 
 ![Architecture](docs/agent/architecture.png)
 
-<details>
-<summary>Mermaid 원본</summary>
-
-```mermaid
-flowchart TD
-  S[setup] --> R[research]
-  R --> O[orchestrator · 계획]
-  O -.->|Send × Task 수| W[worker]
-  O -.->|계획 비면| P
-  W --> C[collect_evidence · Fan-in]
-  C --> Y[synthesis]
-  Y --> G[report]
-  G --> Q{quality_eval}
-  Q -.->|근거 문제 · 재계획| O
-  Q -.->|종합 문제| Y
-  Q -.->|보고서 문제 · 구버전| G
-  Q -.->|통과 + --human-review| H[human_review ⏸]
-  Q -.->|통과 · 상한 도달| P[publish]
-  H -->|--resume| A[apply_review]
-  A -.->|부결 있음| Y
-  A -.->|부결 없음| P
-```
-
-</details>
-
-실선은 고정 엣지, 점선은 조건부 엣지(`dispatch`·`route_after_eval`·`route_after_review`)입니다.
-**Worker 목록이 코드에 없습니다** — Worker 수는 계획의 길이로 실행 시점에 정해집니다. 실제 출력은
-[docs/agent/graph.md](docs/agent/graph.md)(`draw_mermaid()`) 에 있습니다.
+노드별 분기 조건과 실제 `draw_mermaid()` 출력은 [docs/agent/graph.md](docs/agent/graph.md).
 
 ---
 
