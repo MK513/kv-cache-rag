@@ -147,7 +147,7 @@ def test_partial_notice_has_no_internal_ids():
     partial = {"stop_reason": "Judge 실패 — L1Judgment: 응답 누락 3건 — r0-market-both:claim_market_①_x",
                "failed": [("groundedness_l2", ["근거 Claim 이 없는 종합 문장: …"] * 5),
                           ("structure", ["pages: 11쪽 > 10쪽"])]}
-    text = report._partial_banner(partial) + report._partial_limits(partial)
+    text = report._partial_limits(partial)
     assert "L1Judgment" not in text and "claim_market" not in text and "근거 Claim 이 없는" not in text
     assert "판정 응답 누락 3건" in text and "종합 근거(L2) 5건" in text and "구조·분량 11쪽 > 10쪽" in text
 

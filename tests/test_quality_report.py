@@ -109,15 +109,16 @@ def failing(state):
     return out | evaluator.quality_eval(out)
 
 
-def test_partial_is_marked_up_front_and_in_limits(state, monkeypatch, tmp_path):
+def test_partial_is_marked_at_the_end_of_limits(state, monkeypatch, tmp_path):
     monkeypatch.setattr(pdf, "render_pdf", fake_renderer(lambda text: 7))
     out = failing(state)
     update = pdf.publish(out)
     body = (tmp_path / state["run_id"] / "report.md").read_text(encoding="utf-8")
 
     assert update["run_status"] == "partial"
-    assert body.index("부분 발행(partial)") < body.index("## SUMMARY")
-    assert "**품질 평가 미달 (부분 발행)**" in body and "종합 근거(L2)" in body
+    # 머리말이 아니라 §6 끝, REFERENCE 바로 앞에 둔다
+    assert body.index("## 6. 한계") < body.index("부분 발행(partial)") < body.index("## REFERENCE")
+    assert "## SUMMARY" in body[:body.index("부분 발행")] and "종합 근거(L2)" in body
     assert (tmp_path / state["run_id"] / "final" / pdf.FINAL_FILENAME).exists()
 
 

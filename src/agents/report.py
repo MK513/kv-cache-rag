@@ -66,13 +66,12 @@ def _number_citations(markdown: str, marks: dict) -> str:
 
 
 def _held(state: dict) -> str:
-    """평가 보류를 남긴 관점이 있으면 머리말에 경고를 단다(§5 — 자료가 없는 항목은 평가 보류)."""
-    held = [node for node in ASSESSMENT_ROLES
+    """평가 보류를 남긴 관점(§5 — 자료가 없는 항목은 평가 보류). §6 끝에 한 줄로 단다."""
+    held = [ROLE_LABEL.get(rules.ROLE_OF.get(node, node), node) for node in ASSESSMENT_ROLES
             if (state.get(node) or {}).get("status") in {"partial", "failed"}]
     if not held:
         return ""
-    return ("\n> ⚠️ 근거를 확보하지 못해 **평가 보류** 항목을 남긴 관점: "
-            f"{', '.join(held)}\n")
+    return f"\n- 근거를 확보하지 못해 **평가 보류** 항목을 남긴 관점: {', '.join(held)}\n"
 
 
 # ── 표시 상한과 압축 단계 ─────────────────────────────────────────────────────
@@ -518,19 +517,11 @@ def _failed_text(name: str, reasons: list[str]) -> str:
     return f"{CRITERION_LABEL.get(name, name)} {detail}"
 
 
-def _partial_banner(partial: dict | None) -> str:
-    if not partial:
-        return ""
-    failed = ", ".join(_failed_text(name, reasons) for name, reasons in partial.get("failed", []))
-    return ("\n> ⚠️ **부분 발행(partial)** — 품질 기준을 모두 충족하지 못한 상태로 발행했다. "
-            f"종료 사유: {_stop_text(partial.get('stop_reason') or '')}."
-            + (f" 미달 기준: {failed}." if failed else "") + " 상세는 §6.\n")
-
-
 def _partial_limits(partial: dict | None) -> str:
     if not partial:
         return ""
-    lines = ["", "**품질 평가 미달 (부분 발행)**", ""]
+    # 머리말에 두면 본문을 읽기 전에 내부 품질 상태가 먼저 보인다. §6 끝(REFERENCE 바로 앞)에 둔다.
+    lines = ["", "**⚠️ 부분 발행(partial) — 품질 기준 일부 미달**", ""]
     lines += [f"- {_failed_text(name, reasons)}" for name, reasons in partial.get("failed", [])]
     lines.append(f"- 종료 사유: {_stop_text(partial.get('stop_reason') or '')}")
     lines.append("- 기준별 판정 사유 전문은 실행 기록 `quality-v*.json`·`decisions.jsonl` 에 있다.")
@@ -608,7 +599,7 @@ def build(state: dict, *, version: int = 1, compaction: int = 0,
 **대상 기술** TurboQuant (SW 압축) · ITME (HW 메모리 확장)
 **적용 도메인** {domain}
 **생성 모델** {model_name()}
-{_partial_banner(partial)}{_held(state)}
+
 ## SUMMARY
 
 {summary}
@@ -675,7 +666,7 @@ ITME를 대상으로, TRL·시장성·이해관계자·도메인 네 관점에�
 {synthesis.get('combination_hypothesis') or '해당 없음'}
 
 ## 6. 한계
-{_partial_limits(partial)}
+
 **확인된 근거 공백**
 
 {_gaps_section(state, m["gaps"], m["hidden_gaps"])}
@@ -696,6 +687,7 @@ ITME를 대상으로, TRL·시장성·이해관계자·도메인 네 관점에�
 {_quality_scope(state, displayed_ids)}
 - 확증 편향을 줄이기 위해 기술별 인용 근거의 출처 묶음 분포를 검사하고, 성능 향상뿐 아니라 잔여 비용과 근거 공백도 함께 기록한다.
 {"- 분량 상한(10쪽)을 지키기 위해 압축 " + str(compaction) + "단계로 표시 항목을 줄였다. 생략한 Claim 은 실행 기록에 남아 있다." if compaction else ""}
+{_partial_limits(partial)}{_held(state)}
 
 {references}
 """
