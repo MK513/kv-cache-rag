@@ -65,15 +65,20 @@ class WebEvidenceStore:
     transport/searcher are dependency injection boundaries, not evidence bypasses:
     extraction, size limits, hashing and registration always execute here.
     A run must have one process owner (R1); an RLock serializes local tool calls.
+    subdir (Worker task_id) gives each parallel stakeholder Task its own
+    runs/<run_id>/workers/<subdir>/web/ so manifests and budgets never collide.
     """
-    def __init__(self, run_id, root='runs', *, searcher=None, transport=None,
+    def __init__(self, run_id, root='runs', *, subdir=None, searcher=None, transport=None,
                  max_sources=24, max_fetches=40, max_searches=16,
                  max_body_chars=50000, max_total_chars=300000,
                  max_response_bytes=2_000_000, min_body_chars=120, timeout=15):
         if not isinstance(run_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', run_id):
             raise ValueError('invalid run_id')
+        if subdir is not None and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', subdir):
+            raise ValueError('invalid subdir')
         self.run_id = run_id
-        self.directory = Path(root).resolve() / run_id / 'web'
+        base = Path(root).resolve() / run_id
+        self.directory = (base / 'workers' / subdir if subdir else base) / 'web'
         self.directory.mkdir(parents=True, exist_ok=True)
         self.searcher = searcher or _search_tavily
         self.transport = transport or fetch_page
@@ -83,7 +88,10 @@ class WebEvidenceStore:
             max_searches=max_searches, max_body_chars=max_body_chars,
             max_total_chars=max_total_chars, max_response_bytes=max_response_bytes,
             min_body_chars=min_body_chars)
-        if any(type(v) is not int or v <= 0 for v in self.limits.values()) or timeout <= 0:
+        # max_searches=0 is a spent Worker budget (task.web_budget): every search is blocked,
+        # so stakeholder records execution_gap instead of crashing.
+        if any(type(v) is not int or v < (0 if k == 'max_searches' else 1)
+               for k, v in self.limits.items()) or timeout <= 0:
             raise ValueError('web limits must be positive')
         path = self.directory / 'manifest.json'
         if path.exists():

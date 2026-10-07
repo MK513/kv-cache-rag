@@ -1,4 +1,4 @@
-"""REFERENCE 포맷터 — 담당: R5
+"""REFERENCE 포맷터 — 담당 C (agent/ow-quality)
 
 원칙:
 - 실제 Claim에 사용된 Evidence를 따라가 최종 출처를 추출한다(§8).
@@ -10,18 +10,15 @@
   URL 를 그것만으로는 채울 수 없다.
 """
 
+from src.schema import ASSESSMENT_ROLES
+
 GROUPS = [
     ("[A] Doc Pool 논문 (RAG 색인)", ["papers_core"]),
     ("[B] 풀 밖 색인 자료 (ecosystem · context)", ["ecosystem", "context"]),
 ]
 
-ASSESSMENT_NODES = [
-    "research",
-    "maturity",
-    "market",
-    "stakeholder",
-    "domain_assessment",
-]
+# 역할 목록은 schema 한 곳에서 가져온다(코드 검토 D2).
+ASSESSMENT_NODES = ASSESSMENT_ROLES
 
 
 def _used_source_ids_from_assessment(assessment: dict) -> set[str]:
@@ -90,6 +87,11 @@ def _used_sources(state: dict) -> list[dict]:
                 used[source_id] = source
 
     return list(used.values())
+
+
+def cited_source_ids(state: dict) -> list[str]:
+    """REFERENCE 에 실릴 source_id 목록. report_manifest.references 가 이 값을 쓴다."""
+    return sorted(s["source_id"] for s in _used_sources(state) if s.get("source_id"))
 
 
 def _date(value) -> str:

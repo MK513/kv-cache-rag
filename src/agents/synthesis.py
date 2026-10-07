@@ -1,26 +1,50 @@
-"""평가 종합 — 담당: R5 | State 읽기 + gaps 순차 병합 (설계서 §6·§7)
+"""평가 종합 — 담당 C (agent/ow-quality) | State 읽기 + gaps 순차 병합 (설계서 §6·§7)
 
 원칙:
 - 새로운 외부 근거를 검색하지 않는다. §7 — 종합 단계는 이미 병합된 근거를 재사용하며
   새 자료가 필요하면 그 항목을 공백으로 남긴다.
-- 앞선 평가 노드가 확정한 Claim 만 재사용한다.
+- 앞선 평가 노드가 확정한 Claim 만 재사용한다. `claim_flags` 가 `invalid` 인 Claim(품질 평가
+  L1 탈락·사람 검토 부결)은 입력에서 뺀다 — 재종합에서 되살아나지 않게(계획서 §5·§9).
+- 일치·차이 항목마다 참조한 `claim_ids` 를 남긴다. Groundedness L2 는 이 목록이 보고서에
+  표시된 유효 Claim 을 가리키는지 본다(계획서 §7-1).
 - 관점 간 차이를 억지로 만들지 않는다(§5).
 - 결합 효과는 공개 실측 근거가 없으면 가설로만 기록한다(§2·§5).
+- 품질 평가가 종합 문제(L2·중립성·편향 ③)로 되돌려 보내면 그 사유를 재작성 지시로 넣는다.
 
-`Synthesis`·`Conflict` 는 `src/schema.py` 가 소유한다. 여기서 다시 정의하지 않는다.
+출력은 `schema.GroundedSynthesis` 이고 실행마다 `synthesis_version` 을 1 올린다. 보고서
+manifest 의 `based_on_synthesis_version` 과 대조하는 publish guard 의 기준값이다(§7-2).
 """
 
 import difflib
 
-from src.llm import get_llm
-from src.schema import Gap, Synthesis
+from pydantic import BaseModel, Field
 
-PERSPECTIVES = [
-    "maturity",
-    "market",
-    "stakeholder",
-    "domain_assessment",
-]
+from src.agents.common import event
+from src.llm import get_llm
+from src.orchestrator.quality_rules import excluded_claim_ids
+from src.schema import (
+    ASSESSMENT_ROLES,
+    PERSPECTIVES,
+    Agreement,
+    Gap,
+    GroundedConflict,
+    GroundedSynthesis,
+)
+
+
+class SynthesisDraft(BaseModel):
+    """LLM 구조화 출력. 버전·라운드는 코드가 채우므로 모델에게 묻지 않는다."""
+
+    agreements: list[Agreement] = Field(
+        default_factory=list,
+        description="여러 관점에서 공통으로 확인되는 사실 또는 방향. claim_ids 에 근거 Claim ID 를 적는다")
+    conflicts: list[GroundedConflict] = Field(
+        default_factory=list,
+        description="관점별 평가가 실제로 달라지는 지점. claim_ids 에 근거 Claim ID 를 적는다")
+    gaps: list[str] = Field(default_factory=list,
+                            description="관점별 근거 공백과 아직 실증되지 않은 항목")
+    combination_hypothesis: str = Field(
+        description="TurboQuant+ITME 결합 가설. 공개 결합 실험이 없으면 추론임을 명시한다(§2·§5).")
 
 
 GAP_SIMILARITY = 0.6    # 실측: 종합이 다시 쓴 공백은 대개 0.6~0.9, 새 항목은 0.5 미만
@@ -32,14 +56,16 @@ def _restates(item: str, existing: list[str]) -> bool:
                for seen in existing)
 
 
-def _claims_text(assessment: dict) -> str:
-    """Assessment 를 종합 입력용 텍스트로 편다. 본문(text) 필드는 더 이상 없다."""
+def _claims_text(assessment: dict, excluded: set[str]) -> str:
+    """Assessment 를 종합 입력용 텍스트로 편다. Claim ID 를 앞에 붙여 참조할 수 있게 한다."""
     if not assessment:
         return "(없음)"
     lines = [f"status: {assessment.get('status', '미상')}"]
     for claim in assessment.get("claims") or []:
+        if claim.get("claim_id") in excluded:
+            continue
         lines.append(
-            f"- [{claim.get('kind', '')}/{claim.get('technology', '')}] "
+            f"- ({claim.get('claim_id', '')}) [{claim.get('kind', '')}/{claim.get('technology', '')}] "
             f"{claim.get('text', '').strip()} "
             f"(근거 {len(claim.get('evidence_ids') or [])}건)"
         )
@@ -47,6 +73,13 @@ def _claims_text(assessment: dict) -> str:
         lines.append(f"- (공백) {gap.get('technology', '')} {gap.get('item', '')}: "
                      f"{gap.get('reason', '')}")
     return "\n".join(lines) if len(lines) > 1 else "status: " + str(assessment.get("status"))
+
+
+def _valid_claim_ids(state: dict, excluded: set[str]) -> set[str]:
+    return {claim.get("claim_id")
+            for role in ASSESSMENT_ROLES
+            for claim in (state.get(role) or {}).get("claims") or []
+            if claim.get("claim_id") and claim.get("claim_id") not in excluded}
 
 
 PROMPT = """너는 평가 종합 담당이다.
@@ -57,7 +90,8 @@ TRL, 시장성, 이해관계자, 도메인 적용 평가 결과를 종합한다.
 
 1. 아래 입력에 포함된 내용만 사용한다.
 2. 새로운 성능 수치, 시장 사례, 채택 사례, 실험 결과를 만들어내지 않는다.
-3. 특정 기술을 종합 승자 또는 더 우수한 기술로 판정하지 않는다.
+3. 특정 기술을 종합 승자 또는 더 우수한 기술로 판정하지 않는다. "더 낫다", "추천한다",
+   "우월하다" 같은 우열 표현을 쓰지 않는다.
 4. agreements에는 여러 관점에서 공통적으로 확인되는 내용을 적는다.
 5. conflicts에는 실제로 평가가 달라지는 경우만 적는다.
    차이가 없다면 빈 목록으로 둔다.
@@ -67,6 +101,11 @@ TRL, 시장성, 이해관계자, 도메인 적용 평가 결과를 종합한다.
    확인되지 않았다면 결합 효과는 실측 결과처럼 쓰지 않는다.
 9. combination_hypothesis는 개별 기술의 확인된 특성으로부터 도출한
    가설임을 명확히 표현한다.
+10. agreements·conflicts 의 각 항목은 claim_ids 에 그 항목이 기대는 Claim ID 를 적는다.
+    Claim ID 는 아래 입력에서 괄호 안에 있는 값만 쓴다. 참조한 Claim 이 말하는 범위를
+    벗어나 서술하지 않는다.
+11. 서로 다른 실험 조건의 수치를 직접 비교하지 않는다. 성능 향상뿐 아니라 입력에 있는
+    한계·비용(정확도 손실, 지연, 복잡도)도 함께 반영한다.
 {fix}
 
 # TRL 평가
@@ -92,7 +131,7 @@ TRL, 시장성, 이해관계자, 도메인 적용 평가 결과를 종합한다.
 FIX = """
 # 재작성 지시
 
-앞선 검증 단계에서 아래 오류가 확인되었다.
+앞선 검증·품질 평가 단계에서 아래 문제가 확인되었다.
 
 {errors}
 
@@ -100,29 +139,71 @@ FIX = """
 근거가 남지 않는 항목은 삭제하거나 근거 공백으로 유지한다.
 """
 
+# 품질 평가가 synthesis 로 되돌려 보낼 때 읽는 기준 (계획서 §7-2 순서 4).
+FEEDBACK_CRITERIA = ("groundedness_l2", "neutrality", "bias")
+
+
+def _feedback(state: dict) -> list[str]:
+    """재작성 사유 — 옛 흐름의 검증 오류와 품질 평가의 종합 문제."""
+    problems = [str(error) for error in (state.get("validation") or {}).get("errors") or []]
+    quality = state.get("quality_eval") or {}
+    if quality.get("next") == "synthesis":
+        for name in FEEDBACK_CRITERIA:
+            verdict = (quality.get("verdicts") or {}).get(name) or {}
+            if verdict.get("status") == "fail":
+                problems += [f"{name}: {reason}" for reason in verdict.get("reasons") or []]
+    return problems
+
+
+def _ground(result, known: set[str]) -> tuple[dict, int]:
+    """LLM 출력을 GroundedSynthesis 형식으로 맞추고 입력에 없는 Claim ID 를 버린다.
+
+    모르는 ID 를 남기면 보고서가 가리킬 Claim 이 없다. 버린 뒤 근거가 비는 항목은 그대로
+    두고 품질 평가 L2 가 잡는다 — 조용히 지우면 종합이 무엇을 주장했는지 사라진다.
+    """
+    data = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+    dropped = 0
+
+    def refs(item) -> dict:
+        nonlocal dropped
+        if isinstance(item, str):              # 옛 Synthesis 형식(문자열 목록)
+            return {"text": item, "claim_ids": []}
+        ids = list(dict.fromkeys(item.get("claim_ids") or []))
+        kept = [cid for cid in ids if cid in known]
+        dropped += len(ids) - len(kept)
+        return item | {"claim_ids": kept}
+
+    agreements = [refs(item) for item in data.get("agreements") or []]
+    conflicts = [refs(item) for item in data.get("conflicts") or []]
+    return {"agreements": agreements, "conflicts": conflicts,
+            "gaps": list(data.get("gaps") or []),
+            "combination_hypothesis": data.get("combination_hypothesis") or ""}, dropped
+
 
 def synthesis(state) -> dict:
     """종합 결과와, 합류분에 자기 공백을 이어 붙인 gaps 를 반환한다(§7 순차 병합)."""
-    errors = (state.get("validation") or {}).get("errors") or []
+    problems = _feedback(state)
+    excluded = excluded_claim_ids(state)
 
     merged_gaps = list(state.get("gaps") or [])          # collect_evidence 가 합류시킨 공백
     # §6 은 종합에게 공백을 "정리" 하라고 한다. 그런데 모델은 노드가 이미 보고한 공백을
     # 자기 말로 다시 쓴다. 문자열 완전 일치로는 못 걸러서 유사도로 본다.
     seen = [gap.get("item", "") for gap in merged_gaps]
 
-    result = get_llm().with_structured_output(Synthesis).invoke(
+    result = get_llm().with_structured_output(SynthesisDraft).invoke(
         PROMPT.format(
-            fix=FIX.format(errors=errors) if errors else "",
-            research=_claims_text(state.get("research") or {}),
+            fix=FIX.format(errors="\n".join(f"- {p}" for p in problems)) if problems else "",
+            research=_claims_text(state.get("research") or {}, excluded),
             gaps="\n".join(f"- {gap.get('technology', '')} {gap.get('item', '')}: "
                             f"{gap.get('reason', '')}" for gap in merged_gaps) or "(없음)",
-            **{perspective: _claims_text(state.get(perspective) or {})
+            **{perspective: _claims_text(state.get(perspective) or {}, excluded)
                for perspective in PERSPECTIVES},
         )
     )
+    grounded, dropped = _ground(result, _valid_claim_ids(state, excluded))
 
     # 종합이 새로 지목한 공백만 Gap 으로 덧붙인다. 앞 단계 공백은 그대로 유지한다.
-    for item in result.gaps:
+    for item in grounded["gaps"]:
         gap = Gap(role="synthesis", technology="both", item=item,
                   reason="종합 단계에서 확인한 공백").model_dump()
         if not _restates(item, seen):
@@ -130,18 +211,17 @@ def synthesis(state) -> dict:
             merged_gaps.append(gap)
 
     # 보고서 §5 가 읽는 목록에도 앞 단계 공백을 남긴다.
-    result.gaps = sorted({*result.gaps, *(gap.get("item", "") for gap in merged_gaps)} - {""})
+    grounded["gaps"] = sorted({*grounded["gaps"],
+                               *(gap.get("item", "") for gap in merged_gaps)} - {""})
+
+    version = int((state.get("synthesis") or {}).get("synthesis_version") or 0) + 1
+    out = GroundedSynthesis.model_validate(
+        grounded | {"synthesis_version": version, "round": int(state.get("retry_count") or 0)})
 
     return {
-        "synthesis": result.model_dump(),
+        "synthesis": out.model_dump(),
         "gaps": merged_gaps,
-        "trace": [{
-            "node": "synthesis",
-            "status": "ok",
-            "attempt": 1,
-            "agreements": len(result.agreements),
-            "conflicts": len(result.conflicts),
-            "gaps": len(merged_gaps),
-            "rewrite": bool(errors),
-        }],
+        "trace": [event("synthesis", agreements=len(out.agreements), conflicts=len(out.conflicts),
+                        gaps=len(merged_gaps), rewrite=bool(problems),
+                        synthesis_version=version, dropped_refs=dropped)],
     }

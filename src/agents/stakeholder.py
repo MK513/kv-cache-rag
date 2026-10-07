@@ -1,14 +1,15 @@
 """R3 stakeholder node: collect original web evidence, draft, validate, persist.
 
-Writes only stakeholder and trace. An Assessment's completed status denotes
+Returns stakeholder and trace (plus worker_meta when run as a Worker Task). An Assessment's completed status denotes
 structural completion; R5 must still perform the human semantic review.
 """
 import json
+from src.agents.common import task_for
 from src.agents.stakeholder_contract import StakeholderDraft
+from src.schema import WorkerMeta
 from src.tools.web_search import WebEvidenceStore, format_signals
 from src.tools.web_store import digest, save_json, utcnow
 
-TECHNOLOGIES = ('TurboQuant', 'ITME')
 QUERIES = {
     'competitors': 'competing technology vendor response statement',
     'adopters': 'enterprise adoption deployment user statement barriers',
@@ -81,7 +82,12 @@ def make_stakeholder(store: WebEvidenceStore, *, writer=None):
         if type(context_limit) is not int or context_limit < 1000:
             raise ValueError('web_context_chars must be at least 1000')
         domain = config.get('domain') or state.get('domain') or '데이터센터/클라우드'
-        fetched, allowed = {}, {tech: set() for tech in TECHNOLOGIES}
+        # 주체별 질의(QUERIES)는 커버리지 단위라 유지하고, Task 질의는 각 주체 질의 뒤에 붙인다.
+        # 검색 횟수는 그대로라 web_budget 계산이 바뀌지 않는다 (계획서 §11-4 B).
+        techs, task_queries, note = task_for(state, [])
+        task_terms = ' '.join(task_queries)
+        attempted, searched = [], set()      # 실제로 실행된 검색만 (예산 차단·실패 제외)
+        fetched, allowed = {}, {tech: set() for tech in techs}
         pair_results, supplemented = {}, set()
         trace, errors = [], []
         successful_searches = 0
@@ -94,13 +100,16 @@ def make_stakeholder(store: WebEvidenceStore, *, writer=None):
 
         def collect(tech, group, attempt):
             nonlocal successful_searches
-            q = QUERIES[group] + (' official statement primary source' if attempt == 2 else '')
+            q = ' '.join(filter(None, [QUERIES[group], task_terms,
+                                       'official statement primary source' if attempt == 2 else '']))
             got = False
             if attempt == 2:
                 supplemented.add((tech, group))
             try:
                 candidates = store.search(q, tech, top_k)
                 successful_searches += 1
+                attempted.append(f'{tech} {q}')
+                searched.add((tech, group))
                 for candidate in candidates:
                     result = store.fetch(candidate['url'])
                     if result['status'] != 'ok':
@@ -115,7 +124,7 @@ def make_stakeholder(store: WebEvidenceStore, *, writer=None):
                       error=str(exc))
             return got
 
-        for tech in TECHNOLOGIES:
+        for tech in techs:
             for group in QUERIES:
                 pair_results[tech, group] = collect(tech, group, 1)
         for (tech, group), present in list(pair_results.items()):
@@ -157,11 +166,12 @@ def make_stakeholder(store: WebEvidenceStore, *, writer=None):
             while True:
                 model_calls += 1
                 try:
-                    raw = writer(instruction=INSTRUCTION, domain=domain, context=context, feedback=feedback)
+                    raw = writer(instruction=INSTRUCTION + note, domain=domain, context=context, feedback=feedback)
                     draft = raw if isinstance(raw, StakeholderDraft) else StakeholderDraft.model_validate(raw)
                     proposed = {}
                     for item in draft.claims:
-                        missing = set(item.evidence_ids) - (allowed[item.technology] & visible_ids)
+                        # Task 대상이 아닌 기술의 Claim 은 근거가 없는 것으로 보고 _diagnose 가 이유를 붙인다
+                        missing = set(item.evidence_ids) - (allowed.get(item.technology, set()) & visible_ids)
                         if missing:
                             raise ValueError(_diagnose(missing, item.technology, allowed,
                                                        visible_ids, all_evidence))
@@ -176,12 +186,15 @@ def make_stakeholder(store: WebEvidenceStore, *, writer=None):
                         data['claim_id'] = 'claim-' + digest(json.dumps(data, ensure_ascii=False, sort_keys=True))
                         proposed[data['claim_id']] = data
                     claims = list(proposed.values())
-                    draft_gaps = [dict(role='stakeholder', **g.model_dump()) for g in draft.gaps]
+                    draft_gaps = [dict(role='stakeholder', **g.model_dump()) for g in draft.gaps
+                                  if g.technology in techs]   # 대상 밖 기술로 보완 검색하지 않는다
                     event('draft_validation', attempt=model_calls, claims=len(claims))
                     errors = []
                     break
-                except Exception as exc:
-                    feedback = str(exc) if isinstance(exc, ValueError) else f'writer error: {type(exc).__name__}'
+                except ValueError as exc:
+                    # 초안 검증 실패만 수리한다. LLM 호출 오류(timeout·429 등)는 그대로 올려
+                    # worker 의 classify() 가 transient/permanent 로 나누게 한다 (계획서 §1)
+                    feedback = str(exc)
                     errors = [feedback]
                     event('draft_validation', 'failed', model_calls, error=feedback)
                     if repair_used:
@@ -200,13 +213,22 @@ def make_stakeholder(store: WebEvidenceStore, *, writer=None):
             errors.append('all stakeholder searches failed; collection could not execute')
         covered = {(c['technology'], c['stakeholder_group']) for c in claims}
         gaps = {(g['technology'], g['item']): g for g in draft_gaps}
-        for tech in TECHNOLOGIES:
+        for tech in techs:
             for group in QUERIES:
                 if (tech, group) not in covered and (tech, group) not in gaps:
                     gaps[tech, group] = dict(role='stakeholder', technology=tech, item=group,
                         reason='원문 본문 근거 미확보' if not pair_results[tech, group] else '직접 반응 또는 근거 있는 추론을 확인하지 못함')
+        for pair, g in gaps.items():
+            if pair not in searched:
+                # 조사하지 못한 칸은 "근거 없음" 이 아니다 — 커버리지 통과 근거가 되지 않게 한다 (§4-1 F4)
+                g.update(kind='execution_gap', reason='웹 검색 미실행 (예산 소진 또는 검색 실패)')
         status = 'failed' if errors else ('partial' if gaps else 'completed')
         if errors:
+            # 검색 0회면 실행 실패. 결과가 있던 칸은 초안 인용이 끝내 검증을 통과하지 못한 것,
+            # 검색했으나 결과가 없던 칸은 그대로 근거 없음. 예산 차단 칸은 위의 execution_gap 유지
+            for pair, g in gaps.items():
+                g.setdefault('kind', 'execution_gap' if successful_searches == 0
+                             else 'invalid_evidence' if pair_results.get(pair) else 'evidence_gap')
             claims = []
         assessment = dict(claims=claims, sources=list(sources.values()), evidence=list(all_evidence.values()),
                           gaps=list(gaps.values()), status=status)
@@ -218,7 +240,12 @@ def make_stakeholder(store: WebEvidenceStore, *, writer=None):
         with (store.directory.parent / 'stakeholder-trace.jsonl').open('a', encoding='utf-8') as f:
             for row in trace:
                 f.write(json.dumps(row, ensure_ascii=False) + '\n')
-        return {'stakeholder': assessment, 'trace': trace}
+        out = {'stakeholder': assessment, 'trace': trace}
+        if state.get('task'):
+            out['worker_meta'] = WorkerMeta(
+                attempted_queries=list(dict.fromkeys(attempted)), retrieved=len(fetched),
+                web_searches_used=store.manifest['usage']['search_calls']).model_dump()
+        return out
     return node
 
 
@@ -227,5 +254,10 @@ def stakeholder(state) -> dict:
     if not state.get('run_id'):
         raise ValueError('run_id is required; initialize the new R1 State before stakeholder')
     config = state.get('run_config') or {}
-    store = WebEvidenceStore(state['run_id'], root=config.get('runs_dir', 'runs'), **config.get('web', {}))
+    web, task = dict(config.get('web', {})), state.get('task')
+    if task:
+        # Task 별 폴더 + dispatch 가 할당한 실행 전체 예산의 몫 (계획서 §4-1)
+        web['max_searches'] = task['web_budget']
+    store = WebEvidenceStore(state['run_id'], root=config.get('runs_dir', 'runs'),
+                             subdir=task['task_id'] if task else None, **web)
     return make_stakeholder(store)(state)

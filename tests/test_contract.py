@@ -104,10 +104,11 @@ def test_log_decision(tmp_path):
 
 
 def test_lane_stubs_are_explicit():
+    # C 레인(evaluator·versions)은 agent/ow-quality 에서 구현됐다. 남은 스텁은 A 의 worker 다.
+    from src.agents.worker import worker
     with pytest.raises(NotImplementedError):
-        evaluator.quality_eval({})
-    with pytest.raises(NotImplementedError):
-        versions.check_publish_guard({})
+        worker({})
+    assert versions.check_publish_guard(load("state_after_report.json")) == []
 
 
 def test_settings_contract_sections():

@@ -9,9 +9,9 @@ papers_core 를 조회하면 의미적으로 가까운 기술 서술이 시장 �
 """
 
 import re
-from datetime import datetime, timezone
 
-from src.agents.common import run_node
+from src.agents.common import (CITATION_RE, claim_body, claim_technology, event, gaps_from_text, invalid_gaps, retrieve,
+                               run_node, task_for, worker_meta)
 from src.schema import Assessment, Claim, Evidence, Gap, Source
 from src.tools.docs import format_chunks
 from src.tools.docs import bind_document_search
@@ -33,14 +33,12 @@ INSTRUCTION = """너는 시장성 평가 담당이다. 아래 세 절의 제목�
 
 논문 성능 수치와 시장 매출을 섞지 않는다."""
 
-TECHS = ["TurboQuant", "ITME"]
 QUERIES = [
-    ("시장 규모 성장성 추론 메모리 비용", "both"),
-    ("상용화 제품 출시 발표 실제 배포 채택", "both"),
-    ("서빙 프레임워크 지원 현황 표준화 동향", "both"),
+    "시장 규모 성장성 추론 메모리 비용",
+    "상용화 제품 출시 발표 실제 배포 채택",
+    "서빙 프레임워크 지원 현황 표준화 동향",
 ]
 SECTION_RE = re.compile(r"^##\s*([①②③])\s*(.*)$", re.MULTILINE)
-CITATION_RE = re.compile(r"\[([0-9a-f]{12})\]")
 SECTION_LABELS = {"①": "시장 규모/성장성", "②": "상용화/채택 현황", "③": "생태계 지지"}
 
 
@@ -54,46 +52,32 @@ def _split_sections(text: str) -> dict[str, str]:
             for i, m in enumerate(marks)}
 
 
-def _gaps_from_text(text: str, reason: str) -> list[Gap]:
-    """본문 마지막 줄의 '근거 공백: ...' 을 Gap 으로 바꾼다."""
-    match = re.search(r"근거\s*공백\s*:\s*(.+)\s*$", text, re.MULTILINE)
-    if not match or match.group(1).strip() in ("", "없음", "-", "None"):
-        return []
-    gaps = []
-    for item in (g.strip() for g in match.group(1).split("|") if g.strip()):
-        lower = item.lower()
-        technology = "both"
-        if "turboquant" in lower and "itme" not in lower:
-            technology = "TurboQuant"
-        elif "itme" in lower and "turboquant" not in lower:
-            technology = "ITME"
-        gaps.append(Gap(role="market", technology=technology, item=item, reason=reason))
-    return gaps
-
 
 def market(state) -> dict:
     run_id = state.get("run_id", "default_run")
     domain = (state.get("run_config") or {}).get("domain", "데이터센터/클라우드")
     search = bind_document_search("market")      # ecosystem 고정 (§3)
+    techs, queries, note = task_for(state, QUERIES)
+    tech_arg = claim_technology(techs)
 
-    chunks, by_id = [], {}
-    for query, technology in QUERIES:
-        for chunk in search.invoke({"query": query, "technology": technology, "top_k": 5}):
-            cid = chunk.get("chunk_id")
-            if cid and cid not in by_id:
-                by_id[cid] = chunk
-                chunks.append(chunk)
+    by_id, attempted = {}, []
+    retrieve(search, [(q, tech_arg) for q in queries], 5, by_id, attempted)
+    chunks = list(by_id.values())
+
+    def done(assessment, trace_event):
+        out = {"market": assessment.model_dump(), "trace": [trace_event]}
+        if state.get("task"):
+            out["worker_meta"] = worker_meta(by_id, attempted, techs)
+        return out
 
     if not chunks:
         # §5 "자료가 없으면 미확인" — 근거 0건으로 시장성을 생성하지 않는다.
         assessment = Assessment(status="failed", claims=[], sources=[], evidence=[], gaps=[
             Gap(role="market", technology=technology, item="시장 근거 미확보",
-                reason="ecosystem 컬렉션 검색 결과 0건") for technology in TECHS])
-        return {"market": assessment.model_dump(),
-                "trace": [{"node": "market", "status": "failed", "attempt": 1,
-                           "timestamp": datetime.now(timezone.utc).isoformat(), "chunks": 0}]}
+                reason="ecosystem 컬렉션 검색 결과 0건") for technology in techs])
+        return done(assessment, event("market", "failed", chunks=0))
 
-    text = run_node(INSTRUCTION, domain, format_chunks(chunks))
+    text = run_node(INSTRUCTION + note, domain, format_chunks(chunks))
 
     found = CITATION_RE.findall(text)
     valid = [cid for cid in found if cid in by_id]
@@ -114,30 +98,33 @@ def market(state) -> dict:
             allowed_uses=["market"], quote=chunk.get("text", "")[:300],
             location=f"p.{chunk.get('page', 1)}")
 
-    covered = {tech for cid in cited for tech in by_id[cid].get("applies_to", [])}
-    if valid and not invalid and len(covered) == len(TECHS):
+    covered = {tech for cid in cited for tech in by_id[cid].get("applies_to", [])} & set(techs)
+    if valid and not invalid and len(covered) == len(techs):
         status = "completed"
     elif valid and not invalid:
         status = "partial"
     else:
         status = "failed"
 
-    claims, gaps = [], _gaps_from_text(text, "ecosystem 색인 내 근거 미확인")
+    claims = []
+    gaps = (gaps_from_text(text, "market", "ecosystem 색인 내 근거 미확인", techs=techs)
+            + invalid_gaps("market", techs, invalid))
     if status != "failed":
-        sections = _split_sections(text) or {"①": text}
+        body = claim_body(text)   # 근거 공백 줄은 Gap 으로 따로 남는다
+        sections = _split_sections(body) or {"①": body}
         for mark, body in sections.items():
             body_cited = list(dict.fromkeys(c for c in CITATION_RE.findall(body) if c in cited))
             label = SECTION_LABELS.get(mark, "시장성")
             if not body_cited:
                 # §6 — 근거가 없는 항목은 Claim 이 아니라 Gap 이다.
-                gaps.append(Gap(role="market", technology="both", item=label,
+                gaps.append(Gap(role="market", technology=tech_arg, item=label,
                                 reason="본문에 인용된 ecosystem 근거 없음"))
                 continue
             claims.append(Claim(
                 claim_id=f"claim_market_{mark}_{run_id[:8]}", text=body,
-                technology="both", kind="fact", evidence_ids=body_cited))
+                technology=tech_arg, kind="fact", evidence_ids=body_cited))
 
-    for tech in TECHS:
+    for tech in techs:
         if tech not in covered:
             gaps.append(Gap(role="market", technology=tech,
                             item=f"{tech} 시장 근거 인용 미확보",
@@ -145,10 +132,5 @@ def market(state) -> dict:
 
     assessment = Assessment(status=status, claims=claims, sources=list(sources.values()),
                             evidence=list(evidence.values()), gaps=gaps)
-    return {
-        "market": assessment.model_dump(),
-        "trace": [{"node": "market", "status": status, "attempt": 1,
-                   "timestamp": datetime.now(timezone.utc).isoformat(),
-                   "chunks": len(chunks), "citations": len(valid),
-                   "invalid_citations": len(invalid), "covered_techs": sorted(covered)}],
-    }
+    return done(assessment, event("market", status, chunks=len(chunks), citations=len(valid),
+                                  invalid_citations=len(invalid), covered_techs=sorted(covered)))
