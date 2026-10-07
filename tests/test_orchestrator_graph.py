@@ -32,8 +32,9 @@ def task(perspective, techs, round_=0):
     return planner.default_task(perspective, techs, round_, "도메인")
 
 
-def plan_of(*tasks):
-    return lambda state, round_=0: list(tasks)
+def specs_of(*specs):
+    """개수 규칙의 결과를 고정한다 — (관점, 기술 목록) 마다 Task 하나."""
+    return lambda found: (list(specs), [])
 
 
 def run_graph(tmp_path, workers, **overrides):
@@ -46,10 +47,9 @@ def run_graph(tmp_path, workers, **overrides):
 # ── 핵심 1: 계획 3개 → Worker 3회 → collect_evidence 1회 → synthesis 1회 ──────────
 
 def test_worker_count_follows_the_plan(tmp_path, monkeypatch):
-    monkeypatch.setattr(planner, "default_plan", plan_of(
-        task("maturity", ["TurboQuant", "ITME"]),
-        task("market", ["TurboQuant", "ITME"]),
-        task("stakeholder", ["TurboQuant", "ITME"])))
+    both = ["TurboQuant", "ITME"]
+    monkeypatch.setattr(planner, "task_specs", specs_of(
+        ("maturity", both), ("market", both), ("stakeholder", both)))
     calls = []
     workers = {name: counting(fn, calls, name) for name, fn in mock_nodes.workers().items()}
 
@@ -114,8 +114,8 @@ def test_classify(exc, kind):
 # ── 핵심 9: 같은 관점 Worker 둘이 병렬로 돌아도 ID 가 충돌하지 않는다 ──────────────────
 
 def test_same_perspective_workers_do_not_collide(tmp_path, monkeypatch):
-    monkeypatch.setattr(planner, "default_plan", plan_of(
-        task("market", ["TurboQuant"]), task("market", ["ITME"])))
+    monkeypatch.setattr(planner, "task_specs", specs_of(
+        ("market", ["TurboQuant"]), ("market", ["ITME"])))
     final = run_graph(tmp_path, mock_nodes.workers())
 
     ids = [c["claim_id"] for c in final["market"]["claims"]]
