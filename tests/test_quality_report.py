@@ -80,7 +80,7 @@ def test_invalid_claim_is_gone_from_body_synthesis_and_reference(state):
     assert MATURITY_TQ not in out["report_manifest"]["sections"]["maturity"]
     assert MATURITY_TQ not in out["report_manifest"]["sections"]["summary"]
     assert "src-maturity-turboquant" not in out["report_manifest"]["references"]
-    assert "근거 무효(품질 평가): " + MATURITY_TQ in out["report"]
+    assert "품질 평가에서 근거 무효로 판정해 본문에서 뺀 Claim 1건" in out["report"]
 
 
 def test_gap_kinds_are_labeled(state):
@@ -88,7 +88,7 @@ def test_gap_kinds_are_labeled(state):
                           "reason": "TimeoutError", "kind": "execution_gap"})
     md = report.report(state)["report"]
 
-    assert "ITME 투자자 발언: TimeoutError *(조사 실행 실패 — 조사가 끝나지 않은 칸)*" in md
+    assert "투자자 발언" in md and "*(조사가 끝나지 않은 칸 — 조사 실행 실패 1건)*" in md
 
 
 def test_limits_section_states_the_quality_scope(state):
@@ -109,15 +109,16 @@ def failing(state):
     return out | evaluator.quality_eval(out)
 
 
-def test_partial_is_marked_up_front_and_in_limits(state, monkeypatch, tmp_path):
+def test_partial_is_marked_at_the_end_of_limits(state, monkeypatch, tmp_path):
     monkeypatch.setattr(pdf, "render_pdf", fake_renderer(lambda text: 7))
     out = failing(state)
     update = pdf.publish(out)
     body = (tmp_path / state["run_id"] / "report.md").read_text(encoding="utf-8")
 
     assert update["run_status"] == "partial"
-    assert body.index("부분 발행(partial)") < body.index("## SUMMARY")
-    assert "**품질 평가 미달 (부분 발행)**" in body and "종합 근거(L2)" in body
+    # 머리말이 아니라 §6 끝, REFERENCE 바로 앞에 둔다
+    assert body.index("## 6. 한계") < body.index("부분 발행(partial)") < body.index("## REFERENCE")
+    assert "## SUMMARY" in body[:body.index("부분 발행")] and "종합 근거(L2)" in body
     assert (tmp_path / state["run_id"] / "final" / pdf.FINAL_FILENAME).exists()
 
 

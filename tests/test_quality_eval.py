@@ -259,7 +259,7 @@ def asked(prompt):
 def agreeable(schema, prompt):
     claims, indices, techs = asked(prompt)
     if schema is evaluator.L1Judgment:
-        return schema(verdicts=[{"claim_id": cid, "supported": True} for cid in claims])
+        return schema(verdicts=[{"claim_id": cid, "verdict": "supported"} for cid in claims])
     if schema is evaluator.L2Judgment:
         return schema(verdicts=[{"index": i, "within_scope": True} for i in indices])
     if schema is evaluator.NeutralityJudgment:
@@ -284,7 +284,7 @@ def test_judge_runs_on_every_criterion(state, monkeypatch):
 def test_judge_rejection_invalidates_the_claim(state, monkeypatch):
     def answer(schema, prompt):
         if schema is evaluator.L1Judgment and MARKET_TQ in prompt:
-            return schema(verdicts=[{"claim_id": MARKET_TQ, "supported": False, "reason": "수치 불일치"}])
+            return schema(verdicts=[{"claim_id": MARKET_TQ, "verdict": "unsupported", "reason": "수치 불일치"}])
         return agreeable(schema, prompt)
     monkeypatch.setattr(evaluator, "judge_llm", lambda: FakeJudge(answer))
     state["run_config"]["quality_judge"] = True
@@ -334,7 +334,7 @@ def test_missing_l1_items_are_asked_again(state, monkeypatch):
         claims, _, _ = asked(prompt)
         if schema is evaluator.L1Judgment and len(claims) > 1 and not first.get(claims[0]):
             first[claims[0]] = True
-            return schema(verdicts=[{"claim_id": claims[0], "supported": True}])   # 나머지 누락
+            return schema(verdicts=[{"claim_id": claims[0], "verdict": "supported"}])   # 나머지 누락
         return agreeable(schema, prompt)
     judge = judge_on(state, monkeypatch, answer)
     out = evaluate(state)
@@ -349,7 +349,7 @@ def test_items_the_judge_never_answers_are_not_passed(state, monkeypatch):
     def answer(schema, prompt):
         if schema is evaluator.L1Judgment:
             claims, _, _ = asked(prompt)        # STAKE_ITME 에는 몇 번을 물어도 답하지 않는다
-            return schema(verdicts=[{"claim_id": cid, "supported": True}
+            return schema(verdicts=[{"claim_id": cid, "verdict": "supported"}
                                     for cid in claims if cid != STAKE_ITME])
         return agreeable(schema, prompt)
     judge_on(state, monkeypatch, answer)

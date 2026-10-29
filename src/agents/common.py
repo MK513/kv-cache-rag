@@ -21,6 +21,35 @@ from src.settings import settings
 
 CITATION_RE = re.compile(r"\[([0-9a-f]{12})\]")
 _GAP_LINE_RE = re.compile(r"근거\s*공백\s*:\s*(.+)\s*$", re.MULTILINE)
+# 모델 출력에 섞여 드는 키릴 문자·한자("…세부 실험표 стой", 20261007-171655 실행). 한국어 보고서에는 쓰지 않는다.
+_FOREIGN_RE = re.compile(r"[\u0400-\u04FF\u4E00-\u9FFF]+")
+# 모델이 `[ id ]`·`[id, id]`·`[id; id]` 로도 인용한다. CITATION_RE 가 이를 놓치면 인용 0건이 되어
+# 근거가 있는 응답 전체가 failed 로 버려진다(20261007 실행의 maturity·TurboQuant).
+_LOOSE_CITATION_RE = re.compile(r"\[\s*([0-9a-f]{12}(?:\s*[,;]\s*[0-9a-f]{12})*)\s*\]")
+
+
+def normalize_citations(text: str) -> str:
+    """느슨한 인용 표기를 `[id][id]` 로 맞춘다."""
+    return _LOOSE_CITATION_RE.sub(
+        lambda m: "".join(f"[{c}]" for c in re.split(r"\s*[,;]\s*", m.group(1))), text or "")
+
+
+def split_by_tech(text: str) -> dict[str, str]:
+    """본문을 기술별 절로 나눈다. 둘 다 찾지 못하면 빈 dict.
+
+    모델마다 제목 모양이 다르다(`1. TurboQuant`, `## TurboQuant`, `### 2. ITME TRL 평가`). 줄 머리에
+    기술명이 단어로 오는 줄을 절 시작으로 본다. `TurboQuant는 …` 같은 본문 줄은 단어 경계가 없어 걸리지 않는다.
+    """
+    starts = {}
+    for tech in TECHS:
+        match = re.search(rf"^[#>*\s]*(?:\d+[.)]\s*)?\**{tech}\b", text or "", re.MULTILINE | re.IGNORECASE)
+        if match:
+            starts[tech] = match.start()
+    if len(starts) < len(TECHS):
+        return {}
+    order = sorted(starts, key=starts.get)
+    ends = [starts[t] for t in order[1:]] + [len(text)]
+    return {tech: text[starts[tech]:end].strip() for tech, end in zip(order, ends)}
 
 
 def event(node: str, status: str = "ok", attempt: int = 1, **fields) -> dict:
@@ -43,7 +72,9 @@ def gaps_from_text(text: str, role: str, reason: str, kind: str = "evidence_gap"
     if payload in ("", "없음", "-", "None"):
         return []
     gaps = []
-    for item in (g.strip() for g in payload.split("|") if g.strip()):
+    for item in (_FOREIGN_RE.sub("", g).strip() for g in payload.split("|")):
+        if not item:
+            continue
         lower = item.lower()
         technology = "both"
         if "turboquant" in lower and "itme" not in lower:
@@ -78,7 +109,10 @@ def task_for(state, default_queries: list) -> tuple[list[str], list, str]:
             f"(다른 기술은 쓰지 않는다)\n조사 초점: {task['focus']}")
     if task.get("rationale"):
         note += f"\n배경: {task['rationale']}"
-    return list(task["technologies"]), list(task["queries"]), note
+    # Task 질의는 기본 질의에 더한다. 대체하면 계획 단계의 짧은 질의("TurboQuant 데이터센터 적용")만으로
+    # 검색해 핵심 청크(LongBench 등)를 놓치고 본문이 "미확인" 나열이 됐다(20261007 실행 domain).
+    queries = list(dict.fromkeys([*default_queries, *task["queries"]]))
+    return list(task["technologies"]), queries, note
 
 
 def retrieve(search, pairs, top_k: int, found: dict, attempted: list) -> None:
@@ -145,6 +179,8 @@ GROUND_RULES = """공통 규칙:
 - 특정 기술을 승자로 선정하거나 우열을 판정하지 않는다.
 - 서로 다른 실험의 수치를 직접 비교하지 않는다. 비교 대상과 실험 조건을 함께 적는다.
 - 성능 향상뿐 아니라 잔여 비용(정확도 손실, 전송 지연, 시스템 복잡도)도 함께 보고한다.
+- 이 지시문의 규칙·가드레일 문장을 본문에 옮겨 쓰지 않는다. 규칙은 지키되 "…한 경우에 해당하므로 …로 남긴다" 같은 설명을 붙이지 않는다.
+- "제공된 청크·문서·인용문" 같은 표현을 쓰지 않는다. 출처 이름으로 쓴다. 예: "TurboQuant 논문은 …", "SK hynix 뉴스룸은 …"
 
 마지막 줄은 반드시 다음 형식으로 끝낸다:
 근거 공백: 항목1 | 항목2      (없으면 "근거 공백: 없음")"""
@@ -154,7 +190,21 @@ _TEMPLATE = PromptTemplate.from_template(
 )
 
 
+NO_CITATION_RETRY = """
+[재작성 지시]
+이전 응답에 인용 ID 가 하나도 없었다. 근거로 쓴 문장마다 끝에 [12자리 ID] 를 붙여 다시 작성한다.
+여러 근거는 [a1b2c3d4e5f6][b2c3d4e5f6a1] 처럼 대괄호를 따로 쓴다."""
+
+
 def run_node(instruction: str, domain: str, context: str) -> str:
+    """인용 표기를 정규화한다. 인용이 하나도 없으면 한 번만 다시 쓰게 한다.
+
+    인용 없는 응답은 status=failed 로 Claim 이 전부 버려진다. 근거 문서가 있는데도 모델이 인용을
+    빠뜨린 경우(20261007 실행의 market)를 형식 문제로 보고 한 번 수리한다.
+    """
     chain = _TEMPLATE | get_llm() | StrOutputParser()
-    return chain.invoke({"instruction": instruction, "rules": GROUND_RULES,
-                         "domain": domain, "context": context})
+    inputs = {"instruction": instruction, "rules": GROUND_RULES, "domain": domain, "context": context}
+    text = normalize_citations(chain.invoke(inputs))
+    if not CITATION_RE.search(text):
+        text = normalize_citations(chain.invoke(inputs | {"instruction": instruction + NO_CITATION_RETRY}))
+    return text

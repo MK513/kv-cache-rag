@@ -110,7 +110,7 @@ def test_contract_fixture_passes_the_publish_guard():
 
 def test_settings_contract_sections():
     cfg = settings()
-    assert cfg["llm"]["model"] == "gpt-4.1-mini"
+    assert cfg["llm"]["model"] == "gpt-5.6-luna"
     orch = cfg["orchestrator"]
     assert (orch["max_retry"], orch["max_workers"]) == (2, 8)
     for section in ("report", "quality"):

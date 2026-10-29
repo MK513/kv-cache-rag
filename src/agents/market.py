@@ -95,7 +95,7 @@ def market(state) -> dict:
             allowed_uses=["market"], title=chunk.get("title", source_id)))
         evidence[cid] = Evidence(
             evidence_id=cid, source_id=source_id, run_id=run_id, collection=collection,
-            allowed_uses=["market"], quote=chunk.get("text", "")[:300],
+            allowed_uses=["market"], quote=chunk.get("text", ""),
             location=f"p.{chunk.get('page', 1)}")
 
     covered = {tech for cid in cited for tech in by_id[cid].get("applies_to", [])} & set(techs)

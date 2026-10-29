@@ -141,7 +141,7 @@ def test_gaps_and_survey_date_are_in_the_limits_section(monkeypatch):
     markdown = report_module.report(_state())["report"]
     limits = markdown[markdown.index("## 6. 한계"):]
 
-    assert "TurboQuant 서빙 처리량: 공개 자료 미확인" in limits
+    assert "**시장성 · TurboQuant** — 서빙 처리량" in limits
     assert "2026-09-22T00:00:00+00:00" in limits
     assert "### 5.3 결합 가설" in markdown        # 5 절에는 공백 소절이 없다
 
@@ -202,7 +202,7 @@ def test_summary_stays_within_the_half_page_budget(monkeypatch):
     assert "외 3건은 분량 상한으로 생략했다" in markdown
 
 
-def test_gap_line_does_not_repeat_the_technology(monkeypatch):
+def test_gaps_are_one_line_per_perspective_and_technology(monkeypatch):
     monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
 
     state = _state()
@@ -215,9 +215,8 @@ def test_gap_line_does_not_repeat_the_technology(monkeypatch):
     limits = report_module.report(state)["report"]
     limits = limits[limits.index("## 6. 한계"):]
 
-    assert "TurboQuant TurboQuant의" not in limits
-    assert "- TurboQuant의 E2E 처리량: 제공된 근거에서 확인하지 못함" in limits
-    assert "- ITME investors: 원문 본문 근거 미확보" in limits      # 접두어가 필요한 쪽
+    assert "- **기술 조사 · TurboQuant** — TurboQuant의 E2E 처리량" in limits
+    assert "- **이해관계자 · ITME** — investors" in limits
 
 
 def test_cached_model_responses_are_disclosed(monkeypatch):
@@ -287,25 +286,7 @@ def test_both_is_written_in_korean(monkeypatch):
                       "reason": "미확인"}]
     markdown = report_module.report(state)["report"]
 
-    assert "두 기술 시장 규모" in markdown and "both" not in markdown
-
-
-def test_both_prefix_is_skipped_when_the_item_already_says_it(monkeypatch):
-    """LLM 이 "양 기술의 ..." 라고 쓰면 "두 기술 양 기술의 ..." 가 되면 안 된다."""
-    monkeypatch.setattr(report_module, "model_name", lambda: "test-model")
-
-    state = _state()
-    state["gaps"] = [
-        {"role": "research", "technology": "both", "item": "양 기술의 하드웨어 스펙 비교",
-         "reason": "제공된 근거에서 확인하지 못함"},
-        {"role": "market", "technology": "both", "item": "시장 규모·성장률",
-         "reason": "ecosystem 색인 내 근거 미확인"},
-    ]
-    limits = report_module.report(state)["report"]
-
-    assert "- 양 기술의 하드웨어 스펙 비교:" in limits
-    assert "두 기술 양 기술의" not in limits
-    assert "- 두 기술 시장 규모·성장률:" in limits      # 기술을 안 말한 항목엔 붙인다
+    assert "**시장성 · 두 기술** — 시장 규모" in markdown and "both" not in markdown
 
 
 def test_premise_prefix_is_not_doubled(monkeypatch):

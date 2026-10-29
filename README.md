@@ -76,11 +76,11 @@
 
 | 구분 | 내용 |
 |---|---|
-| Framework | LangGraph 1.x (`Send` 동적 fan-out, `InMemorySaver`, `interrupt_after`) |
-| LLM / Generator | gpt-4.1-mini (temperature 0, seed 고정) — 계획·생성·종합 |
-| LLM / Judge | gpt-4.1-mini (`llm.judge_model` 로 분리 가능). 코드 검사를 통과한 기준만 Judge 가 봅니다 |
-| Retrieval | FAISS dense(코사인) 단일 모드. 평가 지표 Hit Rate@K 와 MRR@K (`eval/retrieval_metrics.py`) |
-| Embedding | intfloat/multilingual-e5-small (384차원, revision 고정) — 한국어 질의로 영어 원문을 찾는 cross-lingual 검색, CPU 로 돌아가는 크기 |
+| Framework | LangGraph |
+| LLM / Generator | gpt-5.6-luna (추론형 — temperature 미전달, 재현성은 LLM 캐시) |
+| LLM / Judge | gpt-5.6-luna (`llm.judge_model` 로 따로 지정 가능) — 품질 평가 노드가 코드 검사 뒤 의미 판정 |
+| Retrieval | FAISS dense 단일 모드 (Hit@K·MRR@K 측정 스크립트 구현, 정답 청크 라벨링 미완으로 수치 미확정) |
+| Embedding | intfloat/multilingual-e5-small (384차원, cross-lingual, revision 고정) |
 
 ---
 
@@ -175,10 +175,19 @@ uv run python app.py --human-review       # 통과 후 사람 검토(review.csv)
 uv run python app.py --resume <run_id>    # 검토를 채운 뒤 재개
 ```
 
-결과는 `runs/<run_id>/` 에 남습니다 — 보고서 `report.md`, 제출본 `final/*.pdf`, 품질 평가
-`quality-v<N>.json`, 결정 로그 `decisions.jsonl`. 원문 해시가 매니페스트와 어긋나면 `setup` 이
-실행을 중단합니다. 키가 없을 때의 동작, 검토 CSV 작성법, 산출물 전체, 모델 설정, 그 밖의 옵션
-(`--run-id`·`--domain`·`--no-carry-review`)은 [docs/run-notes.md](docs/run-notes.md#실행-매뉴얼) 에 있습니다.
+결과는 `runs/<run_id>/` 에 남습니다 — 보고서 `report.md`, 제출본 `final/RAG-Output_판교_8반_….pdf`,
+생성 여부와 사유 `submission.json`, 검토 기록 `review.csv`, 실행 기록 `run.json`·`trace.jsonl`·`state.json`.
+PDF 는 **검증을 통과했을 때만** 나옵니다. 무효 인용이 남거나(§8) 품질 점검(SUMMARY 분량·한글 글꼴·
+표 잘림·참고문헌 위치, §9)에 걸리면 만들지 않고, 그 사유를 `submission.json` 에 적습니다.
+
+`run_status` 는 세 가지입니다. `completed` 는 모든 Assessment 가 completed 이고 내용 검토를 통과한
+상태(근거 공백은 있을 수 있음), `partial` 은 검토 대기로 멈췄거나 근거 공백이 남은 채 보고서를 낸 상태,
+`failed` 는 failed Assessment·미해결 인용 오류·병합 오류 중 하나가 있는 상태입니다.
+
+모델은 `config/settings.yaml` 의 `llm.model` 이 기본값이고 `.env` 의 `LLM_MODEL` 이 우선합니다.
+실제로 적용된 `temperature`·`seed`·토큰 사용량은 `run.json` 의 `llm` 에 기록되며, 설정 파일 값과
+다를 수 있습니다(재현성 절 참고). 기본 모델은 `gpt-5.6-luna` 이니, 로컬 `.env` 에 예전 `LLM_MODEL`
+값이 남아 있다면 지우거나 비워 두세요.
 
 ---
 
@@ -194,6 +203,64 @@ uv run pytest -q   # 288 passed — API 키·원문(data/raw/) 없이 돈다
 ---
 
 ## Limitations
+
+### 재현성 — 어디까지 되고 어디부터 안 되는가
+
+**같은 보고서가 다시 나오지 않습니다.** 이 파이프라인은 그것을 목표로 하지 않습니다.
+
+| 단계 | 재현 |
+|---|---|
+| 원문 → 청킹 → 임베딩 → 인덱스 | ✅ 코퍼스 해시와 임베딩 revision 이 고정돼 있습니다 |
+| 검색 결과 · `chunk_id` | ✅ 같은 인덱스면 동일합니다 |
+| **주장 문장** | ❌ 모델이 매 실행 다시 씁니다 |
+| **이해관계자 근거** | ❌ 매 실행 웹을 새로 검색합니다 |
+
+측정값: 같은 코퍼스로 두 번 돌렸을 때 `maturity` 노드가 **인용 근거 5건이 완전히 같은데
+본문 유사도 0.258** 이었습니다. 기본 모델 `gpt-5.6-luna` 에 대해 `langchain_openai` 가
+`temperature` 를 보내지 않고(추론형 모델로 취급) `seed` 도 무시되기 때문입니다. `gpt-4.1-mini` 는
+temperature=0·seed 가 전달되지만 OpenAI 의 seed 는 best-effort 라 문장 동일성은 마찬가지로
+보장되지 않고, 인용 형식을 자주 어겨 기본값으로 쓰지 않습니다. 조사 기록은
+[docs/reproducibility-plan.md](docs/reproducibility-plan.md) 에 있습니다.
+
+**클론한 사람이 같은 결과를 얻을 수 없습니다.** `data/raw/`(원문)와 `.cache/`(모델 응답
+캐시)가 Git 에서 제외되고, 웹 검색 결과는 애초에 매일 바뀝니다. 검증이 목적이라면 재실행이
+아니라 `runs/<run_id>/` 의 보고서·근거·검토 기록을 직접 보는 쪽이 맞습니다.
+
+#### 재검토를 줄이는 두 장치
+
+둘 다 재현성의 대체재가 아니라 **사람의 시간을 아끼는 안전망**입니다.
+
+**검토 판정 원장** `reviews/verdicts.json` (Git 에 커밋됩니다)
+재개가 끝나면 판정이 자동으로 쌓입니다. 다음 실행에서 **node·technology·kind·주장 문장·
+인용 근거가 모두 같은** Claim 만 판정을 물려받습니다. 한 글자라도 다르면 사람이 읽은 것이
+아니므로 미판정으로 남습니다. 이월된 판정은 보고서 §6 에 건수와 출처 run_id 가 공시됩니다.
+전부 새로 검토하려면 `--no-carry-review` 를 씁니다.
+
+**모델 응답 캐시** `.cache/llm.sqlite` (Git 제외, 기계마다 따로 쌓입니다)
+키가 프롬프트 전문 + 모델 파라미터입니다. 같은 코퍼스·같은 지시문이면 같은 응답이 나오고,
+프롬프트를 고치면 자동으로 새로 생성합니다. 적중 수는 `run.json` 의 `llm` 과 보고서 §6 에
+남습니다 — 적중은 *이번 실행에서 모델이 새로 판단하지 않았다* 는 뜻입니다.
+
+이해관계자 노드는 매 실행 웹을 새로 조사하므로 **프롬프트가 달라져 캐시가 적중하지 않고,
+그 Claim 들은 매번 새로 검토해야 합니다.**
+
+---
+
+## 보고서 목차
+
+```
+SUMMARY            핵심 평가 결과, ½쪽 이내 (전체 목록은 §5·§6)
+1. 분석 배경
+2. 기술 선정
+3. 기술 개요
+4. 관점별 평가      4.1 TRL  4.2 시장성  4.3 이해관계자  4.4 도메인
+5. 시사점          5.1 일치  5.2 차이·상충  5.3 결합 가설(추론)
+6. 한계            근거 공백(관점별) · 조사 시점과 검토 범위 · 분석의 한계
+REFERENCE          [A] Doc Pool 논문  [B] 풀 밖 색인(ecosystem·context)  [C] 웹 조회
+```
+
+본문 인용은 REFERENCE 번호(`[1]`)로 찍히고, 번호는 제목·arXiv 버전·**인용 페이지**·URL 로
+연결됩니다(§9). 사실 주장은 본문만 싣고 **추론·가설만** 전제와 함께 표시합니다(§6).
 
 - Generator 와 Judge 가 같은 모델(gpt-4.1-mini)입니다. Judge 는 층화 표본(`quality.judge_sample` 60건)만 봅니다.
 - 계획의 개수는 결정적 규칙이지만 focus·질의 문장은 LLM 이 써서 실행마다 달라질 수 있습니다.

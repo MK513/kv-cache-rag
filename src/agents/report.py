@@ -21,6 +21,7 @@ Orchestrator-Workers (계획서 §7-1·§7-2):
 
 import math
 import re
+from collections import Counter
 
 from src.agents.common import CITATION_RE, event
 from src.llm import judge_model_name, llm_report, model_name
@@ -45,10 +46,10 @@ GAP_KIND_LABEL = {"evidence_gap": "근거 없음", "execution_gap": "조사 실�
 CRITERION_LABEL = {"groundedness_l1": "근거 연결(L1)", "groundedness_l2": "종합 근거(L2)",
                    "neutrality": "중립성", "bias": "편향 통제", "coverage": "관점 커버리지",
                    "structure": "구조·분량"}
-# item 이 이미 대상 기술을 말하고 있으면 접두어를 붙이지 않는다. LLM 이 쓴 문장이라
-# "양 기술" · "두 기술" · 기술명 나열 등 표현이 갈린다.
-TECH_ALIAS = {"both": ("두 기술", "양 기술", "TurboQuant", "ITME"),
-              "TurboQuant": ("TurboQuant",), "ITME": ("ITME",)}
+TECH_ORDER = {tech: i for i, tech in enumerate([*TECHS, "both"])}
+# 근거가 없다고만 말하는 Claim. 칸마다 몇 건만 싣는 압축 단계에서 이런 Claim 이 먼저 뽑혀
+# §4.3 이 "발언이 없다" 한 문장이 됐다(20261007-171655 실행). ponytail: 키워드 휴리스틱
+ABSENCE_RE = re.compile(r"확인되지 않|확인할 수 없|미확인|없다|않았다")
 
 
 def _number_citations(markdown: str, marks: dict) -> str:
@@ -60,18 +61,17 @@ def _number_citations(markdown: str, marks: dict) -> str:
     """
     numbered = CITATION_RE.sub(
         lambda m: f"[{marks[m.group(1)]}]" if m.group(1) in marks else m.group(0), markdown)
-    # 같은 출처의 서로 다른 청크를 잇달아 인용하면 [1][1] 이 된다. 지면에는 한 번이면 된다.
-    return re.sub(r"(?:\[(\d+)\])(?:\[\1\])+", r"[\1]", numbered)
+    # 같은 출처의 서로 다른 청크를 잇달아 인용하면 [1][1]·[1] [1] 이 된다. 지면에는 한 번이면 된다.
+    return re.sub(r"\[(\d+)\](?:\s*\[\1\])+", r"[\1]", numbered)
 
 
 def _held(state: dict) -> str:
-    """평가 보류를 남긴 관점이 있으면 머리말에 경고를 단다(§5 — 자료가 없는 항목은 평가 보류)."""
-    held = [node for node in ASSESSMENT_ROLES
+    """평가 보류를 남긴 관점(§5 — 자료가 없는 항목은 평가 보류). §6 끝에 한 줄로 단다."""
+    held = [ROLE_LABEL.get(rules.ROLE_OF.get(node, node), node) for node in ASSESSMENT_ROLES
             if (state.get(node) or {}).get("status") in {"partial", "failed"}]
     if not held:
         return ""
-    return ("\n> ⚠️ 근거를 확보하지 못해 **평가 보류** 항목을 남긴 관점: "
-            f"{', '.join(held)}\n")
+    return f"\n- 근거를 확보하지 못해 **평가 보류** 항목을 남긴 관점: {', '.join(held)}\n"
 
 
 # ── 표시 상한과 압축 단계 ─────────────────────────────────────────────────────
@@ -85,7 +85,7 @@ def _caps(compaction: int) -> dict:
     claims = cfg.get("max_claims_per_cell") or 3
     implications = cfg.get("max_implications") or 4
     gaps = cfg.get("max_gaps") or 12
-    chars = cfg.get("max_quote_chars") or 240
+    chars = cfg.get("max_quote_chars") or 1500
     if compaction <= 0:
         return {"claims": claims, "implications": implications, "gaps": gaps, "chars": chars}
     if compaction == 1:
@@ -109,11 +109,23 @@ def _next_compaction(state: dict) -> int:
 
 
 def _clip(text: str, limit: int) -> str:
-    """Claim 본문을 표시 길이로 자른다. 잘린 부분의 인용 ID 는 끝에 다시 붙여 근거를 잃지 않는다."""
+    """Claim 본문을 표시 길이로 자른다. 잘린 부분의 인용 ID 는 끝에 다시 붙여 근거를 잃지 않는다.
+
+    글자 수로 바로 자르면 "T…", "[cefcd… 처럼 단어·인용 ID 중간에서 끊겼다(20261007-171655 실행).
+    문단 → 문장 경계까지 물리고, 경계가 절반보다 앞이면 그냥 글자 수로 자른다.
+    """
     text = (text or "").strip()
     if len(text) <= limit:
         return text
-    head = text[:limit].rstrip()
+    head = text[:limit]
+    if head.rfind("[") > head.rfind("]"):
+        head = head[:head.rfind("[")]
+    for sep, keep in (("\n\n", 0), ("다.", 2), (". ", 1)):
+        cut = head.rfind(sep)
+        if cut >= limit // 2:
+            head = head[:cut + keep]
+            break
+    head = head.rstrip()
     lost = [cid for cid in CITATION_RE.findall(text[limit:]) if f"[{cid}]" not in head]
     return head + "…" + "".join(f" [{cid}]" for cid in dict.fromkeys(lost))
 
@@ -175,7 +187,7 @@ def _select(state: dict, excluded: set[str], pinned: set[str], per_cell: int,
             chosen = [c for c in items if c["claim_id"] in pinned]
             for claim in chosen:
                 remember(claim)
-            rest = [c for c in items if c["claim_id"] not in pinned]
+            rest = sorted((c for c in items if c["claim_id"] not in pinned), key=_absence)
             while rest and len(chosen) < per_cell:
                 pick = next((c for c in rest if novel(c)), rest[0])
                 rest.remove(pick)
@@ -195,13 +207,21 @@ def _select(state: dict, excluded: set[str], pinned: set[str], per_cell: int,
                 if c.get("claim_id") not in excluded and c not in shown[role]
                 and tech in rules.techs_of(c.get("technology", "both"))]
 
+    # 품질 평가가 편향 ③(선택적 근거)으로 되돌려 보낸 기술은 숨은 한계·비용 Claim 을 모두 싣는다.
+    bias = ((state.get("quality_eval") or {}).get("verdicts") or {}).get("bias") or {}
+    flagged = {t for t in TECHS for reason in bias.get("reasons") or []
+               if reason.startswith(f"③ {t} 선택적")}
     for tech in TECHS:
+        limits = [(r, c) for r, c in hidden(tech) if rules.is_limit_claim(c)]
+        if tech in flagged:
+            for limit in limits:
+                add(*limit)
+            continue
         if any(rules.is_limit_claim(c) and tech in rules.techs_of(c.get("technology", "both"))
                for items in shown.values() for c in items):
             continue
-        limit = next(((r, c) for r, c in hidden(tech) if rules.is_limit_claim(c)), None)
-        if limit:
-            add(*limit)
+        if limits:
+            add(*limits[0])
 
     for tech in TECHS:
         for _ in range(2):
@@ -213,7 +233,15 @@ def _select(state: dict, excluded: set[str], pinned: set[str], per_cell: int,
             if not extra:
                 break
             add(*extra)
-    return shown
+    # Task 가 끝난 순서대로 두면 "2. ITME" 가 "1. TurboQuant" 앞에 왔다. 기술 순서로 둔다(안정 정렬).
+    return {role: sorted(items, key=lambda c: TECH_ORDER.get(c.get("technology"), len(TECH_ORDER)))
+            for role, items in shown.items()}
+
+
+def _absence(claim: dict) -> float:
+    """100자당 부재 표현 수. 낮을수록 내용 있는 Claim 이다."""
+    text = claim.get("text") or ""
+    return len(ABSENCE_RE.findall(text)) * 100 / max(len(text), 1)
 
 
 def _group_counts(claims: list[dict], tech: str, groups_of) -> dict[str, int]:
@@ -317,7 +345,8 @@ def _claims(claims: list[dict], chars: int = 10_000) -> str:
 
     blocks = []
     for claim in claims:
-        body = _clip(claim.get("text") or "", chars)
+        # 모델이 Claim 본문에 쓴 `## TurboQuant` 같은 제목은 보고서 목차를 깨뜨린다. 제목 표시만 뗀다.
+        body = _clip(re.sub(r"^#{1,6}\s*", "", claim.get("text") or "", flags=re.MULTILINE), chars)
         kind = claim.get("kind", "")
         if kind != "fact":
             note = KIND_LABEL.get(kind, kind)
@@ -372,55 +401,53 @@ def _reused() -> str:
             f"그대로 사용했다(이번 실행에서 새로 생성 {report.get('cache_misses', 0)}건).")
 
 
-def _gap_line(gap: dict) -> str:
-    item, technology = gap.get("item", ""), gap.get("technology", "")
-    named = any(alias in item for alias in TECH_ALIAS.get(technology, (technology,)) if alias)
-    head = item if named else f"{TECH_LABEL.get(technology, technology)} {item}".strip()
-    line = f"{head}: {gap.get('reason', '')}".strip(": ").strip()
-    kind = gap.get("kind", "evidence_gap")
-    if kind != "evidence_gap":
-        line += f" *({GAP_KIND_LABEL.get(kind, kind)} — 조사가 끝나지 않은 칸)*"
-    elif gap.get("attempted_queries"):
-        line += f" (조사 질의 {len(gap['attempted_queries'])}건 실행)"
+def _gap_cell_line(role: str, technology: str, gaps: list[dict]) -> str:
+    """관점×기술 칸 하나의 근거 공백을 한 줄로. 항목만 잇고 사유 문구는 뺀다(대부분 같은 문구다)."""
+    items = "; ".join(dict.fromkeys(g.get("item", "") for g in gaps if g.get("item")))
+    line = f"**{ROLE_LABEL.get(role, role)} · {TECH_LABEL.get(technology, technology)}** — {items}"
+    unfinished = Counter(g.get("kind") for g in gaps if g.get("kind", "evidence_gap") != "evidence_gap")
+    if unfinished:
+        kinds = ", ".join(f"{GAP_KIND_LABEL.get(k, k)} {n}건" for k, n in sorted(unfinished.items()))
+        line += f" *(조사가 끝나지 않은 칸 — {kinds})*"
+    queries = {q for g in gaps for q in g.get("attempted_queries") or []}
+    if queries:
+        line += f" (조사 질의 {len(queries)}건 실행)"
     return line
 
 
 def _gaps_section(state: dict, gaps: list[dict], hidden: int) -> str:
-    """§6 한계의 근거 공백. 평평하게 나열하면 수십 줄이 되므로 관점별로 묶는다.
+    """§6 한계의 근거 공백. 관점×기술 칸마다 한 줄로 묶는다.
 
-    §9 목차표 — 6 한계는 자료 공백을 담는다. 분량 상한으로 접은 건수는 숨기지 않고 밝힌다.
+    항목마다 한 줄씩 펴면 54줄이 돼 §6 이 보고서를 덮었다(20261007 실행). §9 목차표 — 6 한계는 자료
+    공백을 담는다. 분량 상한으로 접은 건수와 품질 평가로 뺀 Claim 수는 숨기지 않고 밝힌다.
     """
-    grouped: dict[str, list[str]] = {}
+    cells: dict[tuple[str, str], list[dict]] = {}
     for gap in gaps:
-        grouped.setdefault(gap.get("role", ""), []).append(_gap_line(gap))
+        cells.setdefault((gap.get("role", ""), gap.get("technology", "both")), []).append(gap)
+    lines = [_gap_cell_line(role, tech, cells[role, tech])
+             for role in ROLE_LABEL for tech in (*TECHS, "both") if (role, tech) in cells]
 
     validation = state.get("validation") or {}
     verdicts = validation.get("claim_verdicts") or {}
-    for claim_id in validation.get("rejected_claims") or []:
+    rejected = validation.get("rejected_claims") or []
+    for claim_id in rejected:
         verdict = verdicts.get(claim_id) or {}
-        grouped.setdefault("review", []).append(
-            f"검토 부결: {claim_id} (검토자: {verdict.get('reviewer') or '검토자 미상'} — "
-            f"{verdict.get('comment') or '사유 미기재'})")
-    for claim_id, flag in sorted((state.get("claim_flags") or {}).items()):
-        if (flag or {}).get("status") != "invalid" or claim_id in (validation.get("rejected_claims") or []):
-            continue
-        by = "사람 검토 부결" if flag.get("by") == "human_review" else "근거 무효(품질 평가)"
-        grouped.setdefault("review", []).append(
-            f"{by}: {claim_id} — {flag.get('reason') or '사유 미기재'}")
-
-    if not grouped:
-        return "- 해당 없음"
-
-    blocks = []
-    for role in list(ROLE_LABEL) + ["review"]:
-        items = grouped.get(role)
-        if not items:
-            continue
-        label = "내용 검토" if role == "review" else ROLE_LABEL[role]
-        blocks.append(f"*{label}* ({len(items)}건)\n" + _bullets(items))
+        lines.append(f"검토 부결: {claim_id} (검토자: {verdict.get('reviewer') or '검토자 미상'} — "
+                     f"{verdict.get('comment') or '사유 미기재'})")
+    current = {c.get("claim_id") for role in ASSESSMENT_ROLES for c in (state.get(role) or {}).get("claims") or []}
+    flags = {cid: f or {} for cid, f in (state.get("claim_flags") or {}).items()
+             if cid in current and cid not in rejected}
+    for by, label in (("human_review", "사람 검토에서 부결"), ("quality_eval", "품질 평가에서 근거 무효로 판정")):
+        n = sum(f.get("status") == "invalid" and (f.get("by") == by) for f in flags.values())
+        if n:
+            lines.append(f"{label}해 본문에서 뺀 Claim {n}건 (사유는 실행 기록 `quality-v*.json`·`decisions.jsonl`)")
+    partial = sum(f.get("status") == "partial" for f in flags.values())
+    if partial:
+        lines.append(f"일부 세부 서술이 인용 구절로 확인되지 않은 Claim {partial}건 — 핵심 주장은 근거와 맞아 "
+                     "본문에 싣되, 해당 세부 수치는 원문 대조가 필요하다")
     if hidden:
-        blocks.append(f"- 외 근거 공백 {hidden}건은 분량 상한으로 생략했다(실행 기록 State `gaps` 에 전부 남아 있다).")
-    return "\n\n".join(blocks)
+        lines.append(f"외 근거 공백 {hidden}건은 분량 상한으로 생략했다(실행 기록 State `gaps` 에 전부 남아 있다).")
+    return _bullets(lines)
 
 
 def _exceptions_section(exceptions: list[dict]) -> str:
@@ -452,7 +479,7 @@ def _quality_scope(state: dict, displayed: list[str]) -> str:
         how = "전수" if sampled >= total else "관점×기술 층화 결정적 표본"
         lines.append(
             f"- 자동 품질 평가: 표시된 Claim {total}건 전부의 주장→근거→출처 연결을 코드로 검사했고, "
-            f"근거가 주장을 뒷받침하는지는 LLM Judge({judge_model_name()}, temperature 0)가 "
+            f"근거가 주장을 뒷받침하는지는 LLM Judge({judge_model_name()}, 고정 프롬프트)가 "
             f"{sampled}/{total}건({how}) 판정했다. 종합 문장의 참조 범위·중립성·관점 커버리지·"
             f"선택적 근거 사용도 Judge 가 함께 판정했다.")
         lines.append("- Judge 는 생성과 같은 계열 모델이라 자기평가 편향이 남을 수 있다"
@@ -468,23 +495,36 @@ def _quality_scope(state: dict, displayed: list[str]) -> str:
     return "\n".join(lines)
 
 
-def _partial_banner(partial: dict | None) -> str:
-    if not partial:
-        return ""
-    failed = "; ".join(f"{CRITERION_LABEL.get(name, name)}({', '.join(reasons[:2]) or '사유 미기재'})"
-                       for name, reasons in partial.get("failed", []))
-    return ("\n> ⚠️ **부분 발행(partial)** — 품질 기준을 모두 충족하지 못한 상태로 발행했다. "
-            f"종료 사유: {partial.get('stop_reason') or '미기재'}."
-            + (f" 미달 기준: {failed}." if failed else "") + " 상세는 §6.\n")
+# 종료 사유 원문에는 claim_id·스키마 이름(L1Judgment)이 들어 있다. 지면에는 독자용 문구만 싣고,
+# 원문은 실행 기록(quality-v*.json·decisions.jsonl)에 남긴다.
+STOP_LABEL = (("Judge 실패", "자동 품질 판정(LLM Judge) 일부 미완료"),
+              ("MAX_RETRY", "재조사 횟수 상한 도달 — 근거 부족 미해결"),
+              ("max_repairs", "보고서 수정 횟수 상한 도달"),
+              ("max_steps", "실행 단계 상한 도달"))
+
+
+def _stop_text(reason: str) -> str:
+    for prefix, label in STOP_LABEL:
+        if reason.startswith(prefix):
+            missing = re.search(r"응답 누락 (\d+)건", reason)
+            return label + (f"(판정 응답 누락 {missing.group(1)}건)" if missing else "")
+    return reason or "미기재"
+
+
+def _failed_text(name: str, reasons: list[str]) -> str:
+    pages = next((r for r in reasons if r.startswith("pages:")), "")
+    detail = pages.removeprefix("pages:").strip() if pages else f"{len(reasons) or 1}건"
+    return f"{CRITERION_LABEL.get(name, name)} {detail}"
 
 
 def _partial_limits(partial: dict | None) -> str:
     if not partial:
         return ""
-    lines = ["", "**품질 평가 미달 (부분 발행)**", ""]
-    for name, reasons in partial.get("failed", []):
-        lines.append(f"- {CRITERION_LABEL.get(name, name)}: " + ("; ".join(reasons) or "사유 미기재"))
-    lines.append(f"- 종료 사유: {partial.get('stop_reason') or '미기재'}")
+    # 머리말에 두면 본문을 읽기 전에 내부 품질 상태가 먼저 보인다. §6 끝(REFERENCE 바로 앞)에 둔다.
+    lines = ["", "**⚠️ 부분 발행(partial) — 품질 기준 일부 미달**", ""]
+    lines += [f"- {_failed_text(name, reasons)}" for name, reasons in partial.get("failed", [])]
+    lines.append(f"- 종료 사유: {_stop_text(partial.get('stop_reason') or '')}")
+    lines.append("- 기준별 판정 사유 전문은 실행 기록 `quality-v*.json`·`decisions.jsonl` 에 있다.")
     return "\n".join(lines) + "\n"
 
 
@@ -559,7 +599,7 @@ def build(state: dict, *, version: int = 1, compaction: int = 0,
 **대상 기술** TurboQuant (SW 압축) · ITME (HW 메모리 확장)
 **적용 도메인** {domain}
 **생성 모델** {model_name()}
-{_partial_banner(partial)}{_held(state)}
+
 ## SUMMARY
 
 {summary}
@@ -626,7 +666,7 @@ ITME를 대상으로, TRL·시장성·이해관계자·도메인 네 관점에�
 {synthesis.get('combination_hypothesis') or '해당 없음'}
 
 ## 6. 한계
-{_partial_limits(partial)}
+
 **확인된 근거 공백**
 
 {_gaps_section(state, m["gaps"], m["hidden_gaps"])}
@@ -647,6 +687,7 @@ ITME를 대상으로, TRL·시장성·이해관계자·도메인 네 관점에�
 {_quality_scope(state, displayed_ids)}
 - 확증 편향을 줄이기 위해 기술별 인용 근거의 출처 묶음 분포를 검사하고, 성능 향상뿐 아니라 잔여 비용과 근거 공백도 함께 기록한다.
 {"- 분량 상한(10쪽)을 지키기 위해 압축 " + str(compaction) + "단계로 표시 항목을 줄였다. 생략한 Claim 은 실행 기록에 남아 있다." if compaction else ""}
+{_partial_limits(partial)}{_held(state)}
 
 {references}
 """
